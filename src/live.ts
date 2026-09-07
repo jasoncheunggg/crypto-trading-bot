@@ -1,0 +1,461 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { config } from "./config.ts";
+import { rpc } from "./rpc.ts";
+import { tokenBalance, isNative, toRawUnits } from "./reconcile.ts";
+import type { Chain } from "./types.ts";
+import { gmgn, GmgnRateLimit } from "./gmgn.ts";
+
+const run = promisify(execFile);
+
+/**
+ * Real swap submission.
+ *
+ * Deliberately separate from execution.ts, which only quotes. Quoting is safe to call
+ * anywhere; this spends money, so it lives behind its own module, its own dryRun check and
+ * gmgn-cli's own GMGN_ALLOW_AUTOMATED_TRADES gate. Three independent guards is not paranoia
+ * — one bad call here is unrecoverable in a way no paper bug ever is.
+ *
+ * Interface confirmed by a live round trip on 2026-09-03:
+ *   swap      -> {status:"submitted", hash, order_id}
+ *   order get -> {status:"confirmed", hash, order_id, report:{input_amount, output_amount, …}}
+ * The report is the ONLY source of truth for what was actually filled. A quote is a
+ * prediction; measured once at 828.26 predicted vs 833.49 received, 0.6% apart.
+ */
+
+export interface SwapResult {
+  /** Did the chain mine the transaction successfully? */
+  minedOk?: boolean;
+  /** Did the wallet balance actually move as expected? */
+  balanceConfirmed?: boolean;
+  /** Observed change in the output token's balance. */
+  balanceDelta?: number;
+  ok: boolean;
+  /** Present once the chain has confirmed. */
+  hash?: string;
+  orderId?: string;
+  /** Settled amounts, in whole units. Only set when ok. */
+  inputAmount?: number;
+  outputAmount?: number;
+  /** Realised price: input per output unit. */
+  fillPrice?: number;
+  /**
+   * Gas this swap actually burned, in USD, from the receipt.
+   *
+   * Needed because gas does NOT appear anywhere in the settled amounts: it is paid in native
+   * currency, separately, so the USDG proceeds of a sale read the same whether gas cost 40
+   * cents or four dollars. Percentage fees are already inside the settled amounts; gas never
+   * is. Undefined when the receipt or the native price could not be read — callers fall back
+   * to `exit.breakevenStop.gasUsdPerSwap` rather than treating it as free.
+   */
+  gasUsd?: number;
+  /** Why it failed, for the log and the alert. */
+  error?: string;
+  /** Terminal state as reported by gmgn. */
+  status?: string;
+}
+
+const NATIVE = "0x0000000000000000000000000000000000000000";
+
+/**
+ * What to price to value gas, per chain.
+ *
+ * The zero address answers on robinhood (ETH) but gmgn returns ETH for it on bsc too, which
+ * would value BNB gas at $2,516 instead of $612 — so bsc is pointed at WBNB explicitly. A
+ * wrong gas price is worse than no gas price: it silently corrupts every trade's P&L rather
+ * than falling back to the estimate.
+ */
+const GAS_TOKEN: Record<string, { chain: string; address: string }> = {
+  robinhood: { chain: "robinhood", address: NATIVE },
+  bsc: { chain: "bsc", address: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c" },
+};
+
+const nativePrice = new Map<string, { usd: number; at: number }>();
+const NATIVE_PRICE_TTL_MS = 10 * 60_000;   // gas is cents; a 10-minute-old price is plenty
+
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+/**
+ * Native price derived from CHAIN swaps, so the entry path never spends gmgn budget on it.
+ *
+ * Prices the wrapped native token against the sizing asset out of a recent swap — the same
+ * arithmetic `verifyPrice` does, minus the median-of-3 quorum, which is overkill here: this
+ * number converts wei to dollars for gas accounting, and gas is cents. Measured at ~430ms
+ * against gmgn's ~485ms and agreeing to 0.008%, but on Alchemy's separate quota.
+ *
+ * Deliberately NOT `verifyPrice` itself: the quorum costs 1,897ms and 351 CU for precision
+ * that changes nothing about a gas estimate.
+ */
+async function nativeUsdFromChain(chain: Chain): Promise<number | null> {
+  const quotes = config.quoteAssets[chain] ?? {};
+  const wrapped = Object.entries(quotes).find(([, q]) => !q.isSizingAsset);
+  const sizing = Object.entries(quotes).find(([, q]) => q.isSizingAsset);
+  if (!wrapped || !sizing) return null;
+  const [wAddr, wMeta] = wrapped, [sAddr, sMeta] = sizing;
+  try {
+    const head = parseInt((await rpc<string>(chain, "eth_blockNumber", [])) as string, 16) - 2;
+    for (let w = 0; w < 3; w++) {
+      const to = head - w * 10, from = to - 9;
+      const logs = await rpc<{ transactionHash: string }[]>(chain, "eth_getLogs", [{
+        fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16),
+        address: wAddr, topics: [TRANSFER_TOPIC],
+      }]).catch(() => null);
+      const hashes = [...new Set((logs ?? []).map((l) => l.transactionHash))];
+      for (const h of hashes.slice(0, 3)) {
+        const r = await rpc<{ logs: { address: string; topics: string[]; data: string }[] }>(
+          chain, "eth_getTransactionReceipt", [h]).catch(() => null);
+        if (!r) continue;
+        let maxWrapped = 0n, maxSizing = 0, wLegs = 0, sLegs = 0;
+        for (const l of r.logs) {
+          if (l.topics[0] !== TRANSFER_TOPIC) continue;
+          const a = l.address.toLowerCase();
+          if (a === wAddr) { wLegs++; const v = BigInt(l.data); if (v > maxWrapped) maxWrapped = v; }
+          else if (a === sAddr) { sLegs++; maxSizing = Math.max(maxSizing, Number(BigInt(l.data)) / 10 ** sMeta.decimals); }
+        }
+        if (wLegs > 6 || sLegs > 4) continue;          // batched — unpriceable, same rule as verifyPrice
+        const amt = Number(maxWrapped) / 10 ** wMeta.decimals;
+        if (amt <= 0 || maxSizing <= 0) continue;
+        const px = maxSizing / amt;
+        // A mispaired batch can produce any number at all. Native is not $50 or $50,000.
+        if (px < 200 || px > 20_000) continue;
+        return px;
+      }
+    }
+  } catch { /* fall through to gmgn */ }
+  return null;
+}
+
+/** In-flight refreshes, so a burst of signals cannot start ten lookups at once. */
+const nativeInflight = new Map<string, Promise<number | null>>();
+
+/**
+ * STALE-WHILE-REVALIDATE. A cached price is returned immediately even when past its TTL, and
+ * the refresh happens in the background.
+ *
+ * The chain lookup has to skip BATCHED transactions, and how many it meets is luck: measured
+ * between 840ms and 3,327ms on identical code moments apart. Awaiting that on the entry path
+ * would be worse than the gmgn call it replaces, on tokens that move 58% in a second. A gas
+ * price minutes old is fine — it converts wei to dollars for accounting, not for a decision —
+ * so freshness is worth nothing here and latency is worth a lot.
+ *
+ * Only the very first call of the process can block, and `warmNativeUsd` on startup pays that
+ * one off the entry path.
+ */
+export async function nativeUsd(chain: Chain): Promise<number | null> {
+  const hit = nativePrice.get(chain);
+  const stale = hit !== undefined && Date.now() - hit.at >= NATIVE_PRICE_TTL_MS;
+  if (hit && !stale) return hit.usd;
+  if (hit && stale) { void refreshNative(chain); return hit.usd; }   // serve stale, refresh behind
+  return refreshNative(chain);
+}
+
+/** Fetch and cache. Chain first, gmgn only if the chain cannot answer. */
+function refreshNative(chain: Chain): Promise<number | null> {
+  const running = nativeInflight.get(chain);
+  if (running) return running;
+  const p = (async () => {
+    const onChain = await nativeUsdFromChain(chain);
+    if (onChain !== null) {
+      nativePrice.set(chain, { usd: onChain, at: Date.now() });
+      return onChain;
+    }
+    return nativeUsdFromGmgn(chain);
+  })().finally(() => nativeInflight.delete(chain));
+  nativeInflight.set(chain, p);
+  return p;
+}
+
+/** Pay the first lookup at startup so no signal ever waits for it. */
+export function warmNativeUsd(chain: Chain): void {
+  void refreshNative(chain).catch(() => null);
+}
+
+async function nativeUsdFromGmgn(chain: Chain): Promise<number | null> {
+  const g = GAS_TOKEN[chain];
+  if (!g) return null;
+  try {
+    const stdout = await gmgn(["token", "info", "--chain", g.chain, "--address", g.address, "--raw"], 15_000);
+    const d = JSON.parse(stdout) as { price?: { price?: string } | string };
+    const raw = typeof d.price === "object" ? d.price?.price : d.price;
+    const usd = Number(raw);
+    if (!Number.isFinite(usd) || usd <= 0) return null;
+    nativePrice.set(chain, { usd, at: Date.now() });
+    return usd;
+  } catch { return null; }
+}
+
+/** Gas burned by one transaction, in USD. Null if the receipt or the price is unavailable. */
+async function gasUsdFor(
+  chain: Chain, gasUsed?: string, effectiveGasPrice?: string,
+): Promise<number | undefined> {
+  if (!gasUsed || !effectiveGasPrice) return undefined;
+  const px = await nativeUsd(chain);
+  if (px === null) return undefined;
+  const wei = BigInt(gasUsed) * BigInt(effectiveGasPrice);
+  return (Number(wei) / 1e18) * px;
+}
+
+/**
+ * Confirm a swap using TWO independent chain checks, then read the amounts.
+ *
+ *   1. eth_getTransactionReceipt — did the transaction mine, and did it succeed?
+ *   2. the wallet's token balance — did we actually end up holding the result?
+ *
+ * Both come from Alchemy, so confirmation no longer depends on GMGN agreeing that something
+ * happened. That matters twice over: GMGN shares a 10 req/s IP limit with the price feed, and
+ * its holdings endpoint has been observed returning nothing for a wallet demonstrably holding
+ * 17.4M tokens. The chain has no opinion.
+ *
+ * A receipt alone is not enough — a transaction can mine successfully and still deliver less
+ * than expected. A balance alone is not enough either — it cannot distinguish our swap from
+ * anything else that moved the token. Together they are decisive.
+ *
+ * gmgn's order report is fetched ONCE at the end, purely for the exact settled amounts.
+ */
+async function confirm(
+  chain: Chain, orderId: string, hash: string | undefined,
+  outputToken: string, balanceBefore: number, timeoutMs: number,
+  inputToken: string, inputBefore: number | null,
+): Promise<SwapResult> {
+  const began = Date.now();
+  let minedOk: boolean | undefined;
+  let gasUsd: number | undefined;
+
+  // 1. the receipt — status, and what the transaction actually burned
+  while (hash && Date.now() - began < timeoutMs) {
+    const r = await rpc<{ status?: string; gasUsed?: string; effectiveGasPrice?: string }>(
+      chain, "eth_getTransactionReceipt", [hash]).catch(() => null);
+    if (r) {
+      minedOk = BigInt(r.status ?? "0x0") === 1n;
+      gasUsd = await gasUsdFor(chain, r.gasUsed, r.effectiveGasPrice);
+      break;
+    }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+  if (minedOk === false) {
+    return { ok: false, hash, orderId, minedOk: false, status: "reverted", error: "transaction reverted on chain" };
+  }
+
+  // 2. the balances — BOTH sides, symmetrically, buy or sell.
+  //
+  // Output should rise, input should fall. Checking both is what makes this a real second
+  // opinion rather than a direction-specific special case: a swap that mined but delivered
+  // nothing shows a receipt but no balance movement.
+  //
+  // The native side carries gas, so its fall is larger than the trade and its rise is
+  // smaller. Direction is therefore the only reliable signal on native, never magnitude.
+  const [outAfter, inAfter] = await Promise.all([
+    tokenBalance(chain, outputToken).catch(() => null),
+    tokenBalance(chain, inputToken).catch(() => null),
+  ]);
+  const delta = outAfter === null ? 0 : outAfter - balanceBefore;
+  const outRose = outAfter !== null && delta > 0;
+  const inFell = inAfter !== null && inputBefore !== null && inAfter < inputBefore;
+  // On a sell to native, gas can exceed a tiny proceeds and the native balance still falls —
+  // so the input token leaving is the trustworthy half there.
+  const balanceConfirmed = isNative(outputToken) ? inFell : (outRose && (inFell || isNative(inputToken)));
+
+  if (minedOk === undefined && !balanceConfirmed) {
+    // Neither check could confirm it. NOT the same as "it failed" — reconcile, do not assume.
+    return { ok: false, hash, orderId, status: "unconfirmed", balanceDelta: delta,
+             error: `no receipt and no balance change within ${timeoutMs / 1000}s — RECONCILE` };
+  }
+
+  // 3. exact amounts, one call
+  let inputAmount: number | undefined, outputAmount: number | undefined;
+  try {
+    const stdout = await gmgn(["order", "get", "--chain", chain, "--order-id", orderId, "--raw"], 20_000);
+    const d = JSON.parse(stdout) as { report?: {
+      input_amount?: string; input_token_decimals?: number;
+      output_amount?: string; output_token_decimals?: number } };
+    if (d.report?.input_amount && d.report?.output_amount) {
+      inputAmount = Number(d.report.input_amount) / 10 ** (d.report.input_token_decimals ?? 18);
+      outputAmount = Number(d.report.output_amount) / 10 ** (d.report.output_token_decimals ?? 18);
+    }
+  } catch { /* the chain already confirmed it; exact amounts are a bonus, not a gate */ }
+
+  // Fall back to the observed balance change if gmgn cannot tell us.
+  if (outputAmount === undefined && balanceConfirmed) outputAmount = delta;
+
+  return {
+    ok: true, hash, orderId, status: "confirmed",
+    minedOk: minedOk ?? undefined, balanceConfirmed, balanceDelta: delta,
+    inputAmount, outputAmount, gasUsd,
+    fillPrice: inputAmount && outputAmount && outputAmount > 0 ? inputAmount / outputAmount : undefined,
+  };
+}
+
+/**
+ * Submit one swap and wait for it to settle.
+ *
+ * Refuses unless mode.dryRun is false AND the environment opts in. Returns rather than
+ * throws: a throw here would unwind the exit loop and strand a live position.
+ */
+export async function executeSwap(
+  chain: Chain, inputToken: string, outputToken: string,
+  amountRaw: string, slippagePct: number, settleTimeoutMs = 90_000,
+  /**
+   * ABSOLUTE floor on what the swap may return, in the output token's raw units.
+   *
+   * `--slippage` is a percentage of GMGN's OWN quote at submission time, not of the price we
+   * decided at. When the market falls between the two, the tolerance is measured from the
+   * lower base and the fill can land far below where we thought the floor was: a take-profit
+   * "bounded to breakeven" at 23.7% settled 46% under its trigger and booked -29.66%.
+   *
+   * A min-output is measured from nothing — it is the number of tokens we refuse to go below.
+   * It is the only way to make "this exit cannot lose money" true rather than approximate.
+   *
+   * Omitted for stops and cutoffs, where failing to sell is the worse outcome.
+   */
+  minOutputRaw?: string,
+): Promise<SwapResult> {
+  if (config.mode.dryRun !== false) {
+    return { ok: false, error: "refused: mode.dryRun is not false" };
+  }
+  if (process.env["GMGN_ALLOW_AUTOMATED_TRADES"] !== "1") {
+    return { ok: false, error: "refused: GMGN_ALLOW_AUTOMATED_TRADES is not set to 1" };
+  }
+  const from = config.entry.walletAddress as string | undefined;
+  if (!from) return { ok: false, error: "refused: no entry.walletAddress configured" };
+
+  // Snapshot BEFORE submitting — the balance check is a comparison, not an absolute.
+  const balanceBefore = (await tokenBalance(chain, outputToken).catch(() => null)) ?? 0;
+  const inputBefore = await tokenBalance(chain, inputToken).catch(() => null);
+
+  let submitted: { status?: string; hash?: string; order_id?: string };
+  try {
+    const stdout = await gmgn([
+      "swap", "--chain", chain, "--from", from,
+      "--input-token", inputToken, "--output-token", outputToken,
+      "--amount", amountRaw, "--slippage", String(slippagePct),
+      ...(minOutputRaw ? ["--min-output", minOutputRaw] : []),
+      "--yes", "--raw",
+    ], 60_000);
+    // gmgn prints a confirmation banner before the JSON; take the last brace-delimited chunk.
+    const json = stdout.slice(stdout.indexOf("{", stdout.lastIndexOf("\n{") >= 0 ? stdout.lastIndexOf("\n{") : 0));
+    submitted = JSON.parse(json.trim());
+  } catch (err) {
+    // A rate limit is NOT a market outcome and must never be retried. Reported with its own
+    // status so attemptEntry classifies it as `error` rather than `no-fill`: 13 retries into
+    // an active limit is what turned a 30-second throttle into a 5-minute ban, during which a
+    // live position could not be sold at all.
+    if (err instanceof GmgnRateLimit) {
+      return { ok: false, status: "rate_limited", error: err.message };
+    }
+    return { ok: false, error: `submit failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!submitted.order_id) {
+    return { ok: false, error: `no order_id in response: ${JSON.stringify(submitted).slice(0, 200)}` };
+  }
+  return confirm(chain, submitted.order_id, submitted.hash, outputToken, balanceBefore,
+    settleTimeoutMs, inputToken, inputBefore);
+}
+
+/** Why an entry attempt ended, and whether retrying is SAFE. */
+export type EntryOutcome =
+  | { kind: "filled"; result: SwapResult; partial: false }
+  | { kind: "partial"; result: SwapResult; partial: true; expected: number; got: number }
+  | { kind: "no-fill"; reason: string }        // provably nothing landed — safe to retry
+  | { kind: "error"; reason: string };         // ambiguous or failed — NEVER retry
+
+/**
+ * One entry attempt, classified by whether a retry would be safe.
+ *
+ * The distinction that matters is CERTAINTY, not success. A retry after a swap that actually
+ * landed would double the position with nothing recording the first half — strictly worse
+ * than missing the trade. So "no-fill" is claimed only when both independent checks agree
+ * nothing happened: no receipt on chain AND no balance movement. Everything else — a revert,
+ * a timeout, a submit error, an unreadable response — is "error", and the caller must not
+ * retry it.
+ *
+ * A PARTIAL fill is a real position. It is kept and managed normally; only the size differs
+ * from what was asked for, and that is recorded rather than corrected.
+ */
+/**
+ * Hard floor on tokens received, as a share of the quote we DECIDED on.
+ *
+ * `--slippage` does not bind here. gmgn re-quotes at submission and applies the tolerance to
+ * THAT number, so a price move between our decision and the submit window fills at the new
+ * price however far it ran: measured fills of 79.7%, 86.3%, 89.4% and 89.7% of quote against
+ * a nominal 5% tolerance. `--min-output` is an absolute amount, so it is the only mechanism
+ * that binds against the price the gates actually approved.
+ *
+ * 0.92 comes from the distribution over 46 real entries: 42 filled at 95%+ (median 100.0%,
+ * and 21 came in ABOVE quote), while the four bad ones all landed below 90%. Nothing at all
+ * fell between 90% and 95%, so anything in that gap separates them cleanly; 92% is its
+ * midpoint. Tightening to 98% would start rejecting 8 perfectly good fills.
+ *
+ * The cost is a missed signal plus the gas on a reverted buy. That is the right trade: an
+ * entry 16% above quote is instantly 14% underwater, which puts the -20% stop within noise of
+ * the market and manufactures stop-outs on trades that never moved against us (SLINK,
+ * 2026-09-04: filled 15.9% high, stopped 11 seconds later, -3.5%).
+ */
+const MIN_FILL_RATIO = 0.92;
+
+export async function attemptEntry(
+  chain: Chain, inputToken: string, outputToken: string,
+  amountRaw: string, slippagePct: number, expectedOut: number,
+  outputDecimals = 18,
+): Promise<EntryOutcome> {
+  const before = (await tokenBalance(chain, outputToken).catch(() => null)) ?? 0;
+  // Floor in RAW units, built with toRawUnits rather than float maths: an 18-decimal amount
+  // needs more significant digits than a Number carries, and asking for more than the pool
+  // can give reverts the buy for the wrong reason.
+  const minOut = expectedOut > 0
+    ? toRawUnits(expectedOut * MIN_FILL_RATIO, outputDecimals).toString()
+    : undefined;
+  const r = await executeSwap(chain, inputToken, outputToken, amountRaw, slippagePct, 90_000, minOut);
+
+  if (r.ok) {
+    const got = r.outputAmount ?? r.balanceDelta ?? 0;
+    // Below this share of the quote, treat it as a partial rather than a clean fill.
+    const PARTIAL_BELOW = 0.95;
+    if (expectedOut > 0 && got > 0 && got < expectedOut * PARTIAL_BELOW) {
+      return { kind: "partial", result: r, partial: true, expected: expectedOut, got };
+    }
+    return { kind: "filled", result: r, partial: false };
+  }
+
+  // A guard refusal is not a market outcome. Nothing was submitted, so nothing landed — but
+  // "no-fill" must mean ONE thing: the order went out and provably did not take. Letting a
+  // refusal wear that label would spend retry attempts against a gate that will refuse again,
+  // and would blur the only signal the caller uses to decide a rebuy is safe.
+  if (r.error?.startsWith("refused:")) return { kind: "error", reason: r.error };
+
+  // A rate limit means the order never reached the exchange — which LOOKS like a clean
+  // no-fill, and was classified as one. That was the bug: the caller retried immediately,
+  // gmgn adds 5s to the penalty for every repeat, and a 30-second throttle became a 5-minute
+  // ban that stranded a position through its cutoff. Nothing landed, but retrying now is the
+  // one thing guaranteed to make it worse.
+  if (r.status === "rate_limited") return { kind: "error", reason: r.error ?? "rate limited" };
+
+  // gmgn's own PRE-SUBMISSION refusals. These are deterministic: the pool is identical a
+  // second later, so the retry cannot succeed — it buys nothing and spends rate-limit budget
+  // an OPEN POSITION may need to exit with. Observed twice on 2026-09-05: at 03:00 harmlessly,
+  // and at 15:13 while a position was 293s into its 420s cutoff, where the retry earned a
+  // 31-second 429. The identical shape once cost $3.87 by blocking a take-profit for 31s.
+  //
+  //   GEvmInsufficientSlippage  (40003702) — cannot fill within the tolerance/min-output
+  //   GEvmValueLossTooHigh      (40003712) — price impact beyond what gmgn will submit
+  //
+  // Classified `error`, not `no-fill`, for the reason above: `no-fill` authorises a retry.
+  if (/GEvmInsufficientSlippage|GEvmValueLossTooHigh|40003702|40003712/i.test(r.error ?? "")) {
+    return { kind: "error", reason: r.error ?? "gmgn refused the swap pre-submission" };
+  }
+
+  // A revert is definitive but is NOT retried here: the swap was attempted and rejected by
+  // the chain, which usually means slippage or liquidity moved. The caller re-evaluates from
+  // scratch rather than resubmitting the same order.
+  if (r.status === "reverted") return { kind: "error", reason: "transaction reverted on chain" };
+
+  // Provably nothing landed: no receipt, and the balance did not move.
+  const after = (await tokenBalance(chain, outputToken).catch(() => null)) ?? before;
+  const moved = Math.abs(after - before) > 0;
+  const receiptSeen = r.minedOk !== undefined;
+  if (!receiptSeen && !moved) {
+    return { kind: "no-fill", reason: r.error ?? "no receipt and no balance change" };
+  }
+  return { kind: "error", reason: r.error ?? `ambiguous outcome (status ${r.status})` };
+}
+
+export { NATIVE };

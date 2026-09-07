@@ -1,0 +1,23 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+
+# live trading state: positions, trade ledger, balances, price paths.
+# Contains the wallet address and full trading history.
+state/
+*.log
+
+# the tracked KOL wallet list — this is the strategy's alpha
+wallets.json
+
+# backups and scratch
+*.bak
+sc_*.ts
+sc_*.mjs
+
+# local tooling config
+.claude/
+
+node_modules/
+dist/

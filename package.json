@@ -1,0 +1,13 @@
+{
+  "name": "scalper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "detect": "node --experimental-strip-types src/index.ts",
+    "replay": "node --experimental-strip-types src/replay.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": { "typescript": "^5.6.0", "@types/node": "^22.0.0" }
+}
