@@ -25,6 +25,6 @@ node_modules/
 dist/
 
 # local snapshots extracted from tags (git archive <tag>) — the tag IS the copy,
-# this is just a browsable one. Committing it would duplicate the whole tree.
-v1.0/
-v*.*/
+# this is just a browsable one. Committing it would duplicate the whole tree
+# once per version.
+versions/
