@@ -8,8 +8,10 @@
 state/
 *.log
 
-# the tracked KOL wallet list — this is the strategy's alpha
+# the tracked KOL wallet list — this is the strategy's alpha.
+# wallets.example.json IS committed, so the schema is documented without the real addresses.
 wallets.json
+!wallets.example.json
 
 # backups and scratch
 *.bak

@@ -1,0 +1,44 @@
+{
+  "_README": "Wallets to copy-trade. Edit this file, not config.json. Reloaded at startup.",
+  "_schema": {
+    "name": "Yours. Display only, safe to rename.",
+    "address": "Immutable primary key; per-wallet stats key on this.",
+    "family": "evm | solana - picks the decoder",
+    "chains": "which chains to watch this address on. EVM addresses are valid on every EVM chain.",
+    "platform": "must appear in config.json detection.activePlatforms",
+    "enabled": "false keeps the record without subscribing"
+  },
+  "wallets": [
+    {
+      "name": "@trader_one (evm)",
+      "address": "0x0000000000000000000000000000000000000001",
+      "family": "evm",
+      "chains": [
+        "robinhood"
+      ],
+      "platform": "fomo",
+      "enabled": true
+    },
+    {
+      "name": "@trader_one (solana)",
+      "address": "So11111111111111111111111111111111111111112",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope: Alchemy has no Solana WSS, so re-enabling needs a second provider such as Helius."
+    },
+    {
+      "name": "@trader_two (evm)",
+      "address": "0x0000000000000000000000000000000000000002",
+      "family": "evm",
+      "chains": [
+        "robinhood"
+      ],
+      "platform": "fomo",
+      "enabled": true
+    }
+  ]
+}
