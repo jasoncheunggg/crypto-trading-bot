@@ -1,5 +1,6 @@
 import { config } from "./config.ts";
 import { tokenFacts } from "./liquidity.ts";
+import { roundTripProbe } from "./execution.ts";
 import { sizePosition, type Sizing } from "./portfolio.ts";
 import { countForToken, slotsInUse, secondsSinceLastEntry } from "./positions.ts";
 import type { Signal } from "./types.ts";
@@ -19,6 +20,8 @@ export interface EntryPlan {
   /** Market cap from a lookup now. Reads AFTER their buy moved the price. */
   lookupMarketCapUsd: number | null;
   poolLiquidityUsd: number | null;
+  /** Percent of a $-position that survives an immediate buy-then-sell-back, in quotes. */
+  roundTripRetentionPct: number | null;
   takeProfitPct: number | null;
 }
 
@@ -96,6 +99,7 @@ export async function planEntry(signal: Signal): Promise<EntryPlan> {
     act: false, rejections, sizing: null,
     signalMarketCapUsd: signal.impliedMarketCapUsd,
     lookupMarketCapUsd: null, poolLiquidityUsd: null, takeProfitPct: null,
+    roundTripRetentionPct: null,
   };
   // Cheap gates already failed — don't pay for token facts. A re-entry block is the one
   // exception: the runner shadows those to measure the counterfactual, and a shadow still
@@ -128,6 +132,39 @@ export async function planEntry(signal: Signal): Promise<EntryPlan> {
   const sizing = sizePosition(signal.chain, facts.liquidityUsd);
   plan.sizing = sizing;
   if (sizing.blocked) rejections.push(sizing.blocked);
+
+  // ROUND-TRIP PROBE — the last gate, and the only one that asks whether we could get OUT.
+  //
+  // Quotes a buy at the size we actually intend, then quotes selling all of it straight back.
+  // Measured across all 112 robinhood tokens ever traded (2026-09-08): median retention 96.11%,
+  // 105 of 111 at or above 90%, and the three below 80% were 0.05%, 0.37% (the first rug) and
+  // 2.97% (the honeypot). The worst legitimate token retained 85.68%, so the floor sits in a
+  // wide empty gap rather than near any real distribution.
+  //
+  // This exists because neither provider's own honeypot flag survives contact with the data:
+  // 0x reported sellTaxBps 0 on a token with a 99% sell tax, and gmgn's `is_honeypot` fired on
+  // 9 of 55 tokens including the two best trades ever made — gating on it would have cost $76.58.
+  //
+  // Runs last so it is only paid for by signals that have passed everything else, and it is
+  // skipped entirely when the position would not be taken anyway.
+  const minRet = (config.entry as { minRoundTripRetentionPct?: number }).minRoundTripRetentionPct;
+  if (minRet != null && rejections.length === 0 && sizing.positionUsd > 0) {
+    const rt = await roundTripProbe(
+      signal.chain, signal.token, sizing.positionUsd, signal.tokenDecimals,
+    );
+    if (!rt) {
+      rejections.push("round-trip probe could not price this token");
+    } else if (!rt.sellable) {
+      // Buyable but not exitable is the worst state this system can enter, and one of the 112
+      // tokens is in it today. Never a warning — always a refusal.
+      rejections.push("NO SELL ROUTE — buyable but not exitable");
+    } else {
+      plan.roundTripRetentionPct = rt.retention * 100;
+      if (rt.retention * 100 < minRet) {
+        rejections.push(`round-trip retention ${(rt.retention * 100).toFixed(1)}% < floor ${minRet}%`);
+      }
+    }
+  }
 
   plan.act = rejections.length === 0;
   return plan;

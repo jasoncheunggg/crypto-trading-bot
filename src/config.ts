@@ -18,6 +18,18 @@ function loadEnv(): Record<string, string> {
 
 const env = loadEnv();
 
+/**
+ * Publish the .env values into process.env, without overwriting anything already exported.
+ *
+ * `loadEnv` returned a private object, so a module reading `process.env.ZEROX_API_KEY`
+ * directly saw undefined and silently returned no quote — every entry priced as "unroutable"
+ * with no error anywhere. An exported var still wins, so `ZEROX_API_KEY=... node ...` and CI
+ * overrides behave as before.
+ */
+for (const [k, v] of Object.entries(env)) {
+  if (process.env[k] === undefined) process.env[k] = v;
+}
+
 /** Resolve ${VAR} placeholders so secrets stay out of config.json. */
 function expand(s: string): string {
   return s.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_, k: string) => {

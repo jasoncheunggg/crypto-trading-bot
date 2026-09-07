@@ -57,7 +57,7 @@
     "balanceRefreshMinutes": 30,
     "balanceRefreshNote": "How often the real wallet balance is swept, in minutes. Off the entry path deliberately: a balance read is a 100-300ms RPC round trip and entry already spends ~2.4s. Sizing reads the last sweep. NOT the breaker's denominator - that is a once-a-day anchor, see state/balance.json.",
     "paperCompoundsNote": "Paper sizing uses starting stake + realised P&L - capital in open positions, so it compounds. Set false to go back to a flat paperOverrideUsd, which keeps position size constant and makes night-to-night comparisons cleaner while tuning.",
-    "stopLossPctNote": "Was 25 (and 15 before that). Measured stop rate held at 14-18% across all three settings, so widening mostly enlarged each loss rather than avoiding stops. Overshoot is typically ~6 points and can reach 13, since the price gaps past the line rather than trading through it — so a 20% stop executes nearer 26% in practice.",
+    "stopLossPctNote": "Was 25 (and 15 before that). Measured stop rate held at 14-18% across all three settings, so widening mostly enlarged each loss rather than avoiding stops. Overshoot is typically ~6 points and can reach 13, since the price gaps past the line rather than trading through it \u2014 so a 20% stop executes nearer 26% in practice.",
     "circuitBreaker": {
       "enabled": true,
       "windowHours": 24,
@@ -65,7 +65,7 @@
       "maxConsecutiveLosses": 5,
       "maxTradesPerWindow": 120,
       "maxPositionUsd": 60,
-      "note": "Halts ENTRIES only — open positions may always exit, since refusing to sell turns a bad day into an unbounded one. Computed from the trade ledger on every entry, not held in memory: this runner restarts often and an in-memory counter would reset exactly when it matters. maxPositionUsd is a hard dollar ceiling guarding a different failure from the percentage sizing — if the balance is ever misread, '15%' stays 15% while the dollars become anything. Clear a trip by writing state/breaker-override.json via clearBreaker(). Loss limit kept at 25% on 2026-09-03 after backtesting: worst observed rolling 24h was -10.8% at $30 positions, and one cluster of 3 concurrent stops costs 13.3% of a $200 balance, so -25% fires after roughly two such clusters. Revisit once there is a real bad day to calibrate against.",
+      "note": "Halts ENTRIES only \u2014 open positions may always exit, since refusing to sell turns a bad day into an unbounded one. Computed from the trade ledger on every entry, not held in memory: this runner restarts often and an in-memory counter would reset exactly when it matters. maxPositionUsd is a hard dollar ceiling guarding a different failure from the percentage sizing \u2014 if the balance is ever misread, '15%' stays 15% while the dollars become anything. Clear a trip by writing state/breaker-override.json via clearBreaker(). Loss limit kept at 25% on 2026-09-03 after backtesting: worst observed rolling 24h was -10.8% at $30 positions, and one cluster of 3 concurrent stops costs 13.3% of a $200 balance, so -25% fires after roughly two such clusters. Revisit once there is a real bad day to calibrate against.",
       "maxLossNote": "Measured against a ONCE-A-DAY anchor (state/balance.json), not the live balance: a denominator that moves with every trade makes 'down 15% today' meaningless, and a slow bleed never trips because the balance falls alongside the losses. Set to 15 on 2026-09-03 to collect data under tighter protection. 20,000-day bootstrap of 135 recorded trades at 15% sizing: while the edge holds, -15% halts 5% of days vs 3% at -20%, with the SAME 33 trades/day - so tightening costs almost no data. If the edge halves it is 22% vs 17%; if it is gone, 60% vs 51%, which is the regime where halting is the point. NOTE maxConsecutiveLosses=5 fires at about -15.2% of balance (5 x the measured -21.6% average loss at 15% sizing), so at -15% the two conditions now trip at almost the same depth. With 3 concurrent, one cluster of 3 stops at -26% is about 10% of the anchor, so this halts after roughly 1.5 clusters. Worst day on record: -10.7%. CHANGED TO 20 on 2026-09-04 at the operators request; the same bootstrap puts -20% at 3% of days halted vs 5% at -15%, and it restores headroom above maxConsecutiveLosses=5 (which trips near -15.2%) so the two conditions no longer fire at the same depth."
     },
     "maxConcurrentNote": "Lowered 3 -> 2 on 2026-09-03. Replaying all 147 recorded entries under each cap: cap 3 = 147 trades / $620.14, cap 2 = 142 trades / $628.68, cap 1 = 113 trades / $539.53. The 5 entries a cap of 2 blocks were collectively -$8.54, so it costs nothing measurable while cutting peak GMGN polling from 5 tokens to 4 (2.5 -> 2.0 req/s against a 5/s IP limit). Cap 1 is genuinely worse, forfeiting $80.60.",
@@ -76,7 +76,7 @@
       "maxUsdPerTopUp": 40,
       "minUsdgReserve": 50,
       "note": "Converts USDG to native when gas runs low, so the bot cannot end up rich in USDG and unable to SELL - the worst failure this system has. Average gas is MEASURED from receipts (last 20 swaps), not taken from gasUsdPerSwap, which read $0.525 while the live session averaged $0.691 and one multi-hop swap cost $2.72. Only ever runs with the book FLAT: a conversion while a position is open races that position's exit for the same gmgn rate limit, and a 31s block on an exit cost $3.87 once. Also capped at 3 per day with a 15-minute cooldown, and refuses below $10 because a $1 test conversion lost 21% to gas. Set enabled=true to switch on.",
-      "v2Note": "Disabled under v2.0. It converts USDG->native by SWAP, and v2.0 holds no USDG. The equivalent refill is WETH.withdraw(), which is 1:1 at a fixed contract rather than a routed trade — it needs signing, so it is Phase 3 work. reserveUsdPerSwap and roundTripsLeft remain live and are unaffected."
+      "v2Note": "Disabled under v2.0. It converts USDG->native by SWAP, and v2.0 holds no USDG. The equivalent refill is WETH.withdraw(), which is 1:1 at a fixed contract rather than a routed trade \u2014 it needs signing, so it is Phase 3 work. reserveUsdPerSwap and roundTripsLeft remain live and are unaffected."
     },
     "maxGasGwei": 1.2,
     "maxGasGweiNote": "Refuse new ENTRIES above this gas price. Exits are never blocked - refusing to sell is the unbounded failure. Derived 2026-09-04 from 48 live trades: mean gross edge is $2.68/trade before gas, and at the measured median of 356,561 gas units a round trip costs $0.70 at 0.4 gwei, $1.75 at 1.0, $2.63 at 1.5 (breakeven) and $3.50 at 2.0 (a guaranteed $0.83 loss). 1.2 sits below breakeven and just above the p90 of 0.968 gwei across 113 real swaps, so it blocks almost nothing historically traded while cutting off everything that loses. SCALES WITH POSITION SIZE: at $50 positions breakeven moves to ~3.0 gwei, so raise this if sizing up. Coarse by design - it uses gwei alone, while the p90 route burns 1,033,769 units and loses money well below this line; the precise version would gate on the quotes own gas_limit."
@@ -173,7 +173,7 @@
       }
     },
     "trackedWalletsFile": "wallets.json",
-    "chainsNote": "bsc removed 2026-09-04. In five days it produced ONE trade (-$2.35) from 63+ detected buys — the rest failed the FOMO-router or $950-size gates. It held no capital and no gas, so its permanently zero gas balance also shut the whole runner down once via the gas monitor. Detection cost ~2,400 CU/hour of Alchemy WSS for nothing. Re-add by putting 'bsc' back in this list; the per-chain risk, quoteAssets and tier config are all still present and untouched."
+    "chainsNote": "bsc removed 2026-09-04. In five days it produced ONE trade (-$2.35) from 63+ detected buys \u2014 the rest failed the FOMO-router or $950-size gates. It held no capital and no gas, so its permanently zero gas balance also shut the whole runner down once via the gas monitor. Detection cost ~2,400 CU/hour of Alchemy WSS for nothing. Re-add by putting 'bsc' back in this list; the per-chain risk, quoteAssets and tier config are all still present and untouched."
   },
   "entry": {
     "minTradeUsd": 950,
@@ -186,7 +186,7 @@
           "fomo": false,
           "gmgn": false
         },
-        "note": "No second position in a token while the first is still open, on any platform. Observed 2026-09-01: a tracked wallet bought the same coin twice 11 minutes apart, the second entry 70% above its own first, and both positions stopped out — the rule doubled exposure exactly while the wallet was averaging up into a fall.",
+        "note": "No second position in a token while the first is still open, on any platform. Observed 2026-09-01: a tracked wallet bought the same coin twice 11 minutes apart, the second entry 70% above its own first, and both positions stopped out \u2014 the rule doubled exposure exactly while the wallet was averaging up into a fall.",
         "windowSeconds": 300,
         "windowNote": "Applies only to platforms where allowPerPlatform is false.",
         "maxPositionsPerToken": 1,
@@ -208,21 +208,21 @@
       "robinhood": 1
     },
     "sizeProportionalToSignal": false,
-    "maxSlippagePctVsSignalPriceNote": "Raised 12 -> 25 on 2026-09-01. At 12 the gate rejected 5 signals and ALL FIVE would have hit their take-profit (mean +38.3% replayed in time order, worst-case candle ordering); zero would have lost. The premise — that entering above the tracked wallet means the pump already happened — does not hold when the wallet's own buy is what starts the move. The rejections ranged 12.9-24.1%; nothing has been observed above that, so the gate stays.",
+    "maxSlippagePctVsSignalPriceNote": "Raised 12 -> 25 on 2026-09-01. At 12 the gate rejected 5 signals and ALL FIVE would have hit their take-profit (mean +38.3% replayed in time order, worst-case candle ordering); zero would have lost. The premise \u2014 that entering above the tracked wallet means the pump already happened \u2014 does not hold when the wallet's own buy is what starts the move. The rejections ranged 12.9-24.1%; nothing has been observed above that, so the gate stays.",
     "maxSlippagePctByMarketCap": [
       {
         "maxMarketCapUsd": 600000,
         "pct": 55
       }
     ],
-    "maxSlippagePctByMarketCapNote": "Per-band override on maxSlippagePctVsSignalPrice, matched on OUR fill's market cap (the same reference the tier uses). 55% below $600k, the scalar above it. Basis: 11 gate rejections on record scored against their own tier rules — 10 would have reached take-profit, 0 would have stopped out, and the largest overshoots (50.0%, 44.8%) sat in the $300k-$600k band. The gate's premise — a wide gap means the move already happened — holds for large caps and fails for small ones, where the tracked wallet's buy is what starts the move.",
+    "maxSlippagePctByMarketCapNote": "Per-band override on maxSlippagePctVsSignalPrice, matched on OUR fill's market cap (the same reference the tier uses). 55% below $600k, the scalar above it. Basis: 11 gate rejections on record scored against their own tier rules \u2014 10 would have reached take-profit, 0 would have stopped out, and the largest overshoots (50.0%, 44.8%) sat in the $300k-$600k band. The gate's premise \u2014 a wide gap means the move already happened \u2014 holds for large caps and fails for small ones, where the tracked wallet's buy is what starts the move.",
     "walletAddress": "${WALLET_ADDRESS}",
-    "walletAddressNote": "The wallet bound to the GMGN API key; swaps must originate from it. Read from WALLET_ADDRESS in .env so no real address is committed — config.ts expands ${VAR} at load and throws if it is unset.",
+    "walletAddressNote": "The wallet bound to the GMGN API key; swaps must originate from it. Read from WALLET_ADDRESS in .env so no real address is committed \u2014 config.ts expands ${VAR} at load and throws if it is unset.",
     "retryOnNoFill": {
       "enabled": true,
       "maxAttempts": 2,
       "windowSeconds": 30,
-      "note": "A rebuy is attempted ONLY when both chain checks agree nothing landed — no receipt and no balance movement. Any ambiguous outcome (revert, timeout, unreadable response) is never retried: a rebuy after a swap that actually succeeded would double the position with nothing recording the first half. Each retry re-quotes and must still pass the slippage gate for its market-cap band; past windowSeconds the signal is treated as stale and abandoned."
+      "note": "A rebuy is attempted ONLY when both chain checks agree nothing landed \u2014 no receipt and no balance movement. Any ambiguous outcome (revert, timeout, unreadable response) is never retried: a rebuy after a swap that actually succeeded would double the position with nothing recording the first half. Each retry re-quotes and must still pass the slippage gate for its market-cap band; past windowSeconds the signal is treated as stale and abandoned."
     },
     "partialFill": {
       "treatAsPosition": true,
@@ -240,7 +240,9 @@
       }
     ],
     "maxSlippagePctBySignalMarketCapNote": "Keyed on THEIR fill mcap, not ours. The maxSlippagePctByMarketCap table asks how expensive the thing we are buying already is; this asks how early the tracked wallet got in. Low down, their buy is frequently what STARTS the move, so a wide gap between their fill and our quote is the normal shape of a live runner rather than the stale price the band exists to refuse. First matching band wins, so order ascending. Combined with MAX against the mcap band, so it can only ever LOOSEN and never tightens anything. Falls through to the mcap band when their fill mcap is unknown or above every band. Added 2026-09-04 after CHROME (0x9d7d...1e18) was refused at +152.72% with their fill at $40.7k; note 120 would still refuse CHROME itself. ENTRY ONLY - the sell path keeps maxSlippagePctFor keyed on the positions own entry mcap.",
-    "marketCapCeilingNote": "Kept EQUAL to the top take-profit tier. If the ceiling sits above the last tier, tokens in the gap pass the gate with takeProfitPct null and have no exit target."
+    "marketCapCeilingNote": "Kept EQUAL to the top take-profit tier. If the ceiling sits above the last tier, tokens in the gap pass the gate with takeProfitPct null and have no exit target.",
+    "minRoundTripRetentionPct": 80,
+    "minRoundTripRetentionNote": "Reject a token if buying at our intended size and selling it straight back (quotes only, via 0x) returns less than this percent of the WETH spent. Measured over all 112 robinhood tokens ever traded on 2026-09-08: median 96.11%, 105 of 111 at or above 90%, worst legitimate token 85.68%. The only tokens below 80% were 0.05%, 0.37% (first rug) and 2.97% (the honeypot), so 80 sits in an empty gap. Replaces trusting a provider honeypot flag: 0x reported sellTaxBps 0 on the 99%-sell-tax honeypot, and gmgn's is_honeypot fired on 9 of 55 tokens including the two best trades ever (+$41.88, +$54.16)."
   },
   "exit": {
     "takeProfitTiers": [
@@ -278,7 +280,7 @@
       "firstSellImmediateOnTrigger": true,
       "minSliceUsd": 1,
       "sweepRemainderAtCutoff": true,
-      "sellPctNote": "Percent of the REMAINING position sold per slice. 100 = single-shot exit at the target.\nThis is a function of position size, because gas is charged per swap and is fixed per swap:\n  measured 2026-09-03: ~453,000 gas at 0.46 gwei = ~$0.525 per swap on robinhood.\nReplayed over 115 trades with that gas applied:\n  25% -> 4.6 slices, $2.92 gas/trade, net -2.86%\n  50% -> 3.3 slices, $2.26 gas/trade, net +1.86%\n  100% -> 1.0 slice,  $1.05 gas/trade, net +11.02%\nGross return barely moved (+15.3% to +17.6%) across the whole range, so the ladder was\nbuying very little even before fees. As position size rises the fixed gas matters less and\na lower value becomes worthwhile again — roughly, drop it when gas falls under ~3% of the\nposition. At $15 gas is 18.5%; at $100 it is 2.8%."
+      "sellPctNote": "Percent of the REMAINING position sold per slice. 100 = single-shot exit at the target.\nThis is a function of position size, because gas is charged per swap and is fixed per swap:\n  measured 2026-09-03: ~453,000 gas at 0.46 gwei = ~$0.525 per swap on robinhood.\nReplayed over 115 trades with that gas applied:\n  25% -> 4.6 slices, $2.92 gas/trade, net -2.86%\n  50% -> 3.3 slices, $2.26 gas/trade, net +1.86%\n  100% -> 1.0 slice,  $1.05 gas/trade, net +11.02%\nGross return barely moved (+15.3% to +17.6%) across the whole range, so the ladder was\nbuying very little even before fees. As position size rises the fixed gas matters less and\na lower value becomes worthwhile again \u2014 roughly, drop it when gas falls under ~3% of the\nposition. At $15 gas is 18.5%; at $100 it is 2.8%."
     },
     "takeProfitJitterPct": 0,
     "breakevenStop": {
@@ -289,7 +291,7 @@
       "dexFeePctPerSwap": 0.3,
       "extraBufferPct": 0.5,
       "gasUsdPerSwap": 0.525,
-      "gasUsdPerSwapNote": "Flat gas cost per swap, in USD. Measured on robinhood 2026-09-03: 453,726 gas at 0.4619 gwei = 0.000209569 ETH = $0.513 for a buy, $0.484 for a sell. Unlike the percentage fees this does NOT scale with position size, which is why it dominates small trades — 7% of a $15 position for a single-slice exit, 31% for an eight-slice ladder. Revisit if the ETH price or the routing complexity changes materially. Set 0 to model a gasless venue."
+      "gasUsdPerSwapNote": "Flat gas cost per swap, in USD. Measured on robinhood 2026-09-03: 453,726 gas at 0.4619 gwei = 0.000209569 ETH = $0.513 for a buy, $0.484 for a sell. Unlike the percentage fees this does NOT scale with position size, which is why it dominates small trades \u2014 7% of a $15 position for a single-slice exit, 31% for an eight-slice ladder. Revisit if the ETH price or the routing complexity changes materially. Set 0 to model a gasless venue."
     },
     "trailingStopPct": null,
     "timeCutoffSeconds": 420,
@@ -306,7 +308,7 @@
       "recordPreSignal": true,
       "recordPostSignalFill": true,
       "recordOwnFill": true,
-      "note": "Log all three per position: (1) market cap before the tracked wallet bought, where derivable; (2) implied by their fill — the post-KOL-buy cap; (3) implied by my own fill, which is the tier reference. Their gap measures how much of the move was the KOL's own impact versus mine, and tells you whether tier boundaries are being crossed by slippage.",
+      "note": "Log all three per position: (1) market cap before the tracked wallet bought, where derivable; (2) implied by their fill \u2014 the post-KOL-buy cap; (3) implied by my own fill, which is the tier reference. Their gap measures how much of the move was the KOL's own impact versus mine, and tells you whether tier boundaries are being crossed by slippage.",
       "example": "FLORK: KOL fill implied $1,098,463; a lookup 25 min later read $1,310,227 (+19%). Both landed in the $1M-$4M tier, but a token near a boundary would flip."
     },
     "livePriceFeed": {
@@ -318,7 +320,7 @@
       "note": "Must stay finer than exit.ladder.intervalSeconds, or faster ladders cannot be evaluated in replay.",
       "tailSecondsAfterCutoff": 300,
       "verifyEverySeconds": 90,
-      "verifyEverySecondsNote": "Chain-priced anchor written into the recorded path this often while a REAL position is open (shadows are not anchored). Anchors do not replace the ~1/s gmgn samples — they validate them: if the cheap feed tracks the anchors, the samples between them can be trusted, and alternative sell-interval replays become meaningful. ~7 lookups per trade. 0 disables.",
+      "verifyEverySecondsNote": "Chain-priced anchor written into the recorded path this often while a REAL position is open (shadows are not anchored). Anchors do not replace the ~1/s gmgn samples \u2014 they validate them: if the cheap feed tracks the anchors, the samples between them can be trusted, and alternative sell-interval replays become meaningful. ~7 lookups per trade. 0 disables.",
       "tailNote": "Lowered 600 -> 300 on 2026-09-03. The tail keeps polling a CLOSED position's token so the counterfactual 'would holding longer have helped' stays answerable. At 600s it pushed peak concurrent polled tokens to 5 (2.5 req/s of a 5/s gmgn IP limit); 300s with maxConcurrentPositions 2 gives 3 tokens = 1.5 req/s. Five minutes past close answers most of the question."
     },
     "abMinHoldSeconds": 30,
@@ -328,13 +330,10 @@
     "abControlArmNote": "A third arm running the SAME policy as the live position. Measures the noise floor of the A/B: any minimum-hold effect smaller than the control's spread is not real."
   },
   "execution": {
-    "provider": "gmgn",
-    "transport": "http",
-    "note": "Call the GMGN HTTP API directly. The CLI costs 429-766ms of Node startup per invocation, twice per entry.",
-    "requireAllowAutomatedTradesEnvVar": true,
-    "router": "liqd",
-    "routerNote": "Which router prices and builds swaps: \"liqd\" (api.liqd.ag) or \"gmgn\" (gmgn-cli). v1.0 was gmgn-only and could not trade at all when their API returned 429 to every request for over a day — no quote means no price, no tier, no minimum output, no calldata. liqd needs no API key, has no observed rate limit, takes no forced fee against gmgns 1.00% per side, returns UNSIGNED calldata so we hold our own key, and refused the honeypot gmgn priced at $91.05 while it was worth $1.07.",
-    "inputAssetNote": "v2.0 trades from WETH, not USDG. The new wallet holds native ETH and could not reliably receive USDG, and liqd will not route native (only WETH), so ETH is wrapped once at 58,459 gas and held as WETH. Gas is still paid in native ETH, so a small native balance is kept. Unlike USDG<->ETH this conversion is 1:1 at a fixed contract — no routing, no slippage, no price risk."
+    "router": "0x",
+    "routerNote": "0x Swap API v2 on chain 4663. Chosen over liqd after measuring both against gmgn's price for all 54 tokens with a reference price (2026-09-08): 0x accurate to within 15% on 48/54 and routed all 54; liqd 25/54 with 6 HTTP 404s. liqd's failure was routing COVERAGE, not pricing \u2014 it indexes fewer venues and silently fell back to bad pools, quoting CHROME at 332x while 0x found a Uniswap_V3 route at 0.79x. Coverage re-tested over all 112 robinhood tokens ever traded: 0x buys 112/112 and round-trips 111/112. 0x needs an API key (~5 rps) and takes 15 bps against liqd's none, but gmgn took 200 bps per side. Approval target 0x0000000000001ff3684f28c67538d4d072c22734 verified on chain: 1,009 bytes, EIP-1967 implementation and admin slots zero, owner() reverts \u2014 immutable AND ownerless.",
+    "inputAssetNote": "v2.0 trades from WETH, not USDG. The new wallet holds native ETH and could not reliably receive USDG, and liqd will not route native (only WETH), so ETH is wrapped once at 58,459 gas and held as WETH. Gas is still paid in native ETH, so a small native balance is kept. Unlike USDG<->ETH this conversion is 1:1 at a fixed contract \u2014 no routing, no slippage, no price risk.",
+    "providerNote": "gmgn is no longer in the trading path at all. Its only remaining use is the token/security DATA endpoint for top_10_holder_rate \u2014 see src/security.ts."
   },
   "rateLimit": {
     "gmgnMaxRequestsPerSecond": 10,

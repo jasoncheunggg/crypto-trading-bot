@@ -263,7 +263,7 @@ async function onSignal(s: Signal): Promise<void> {
 
   if (!shadow && liveTrading()) {
     const input = inputAsset(s.chain);
-    const amountRaw = inputAmountRaw(s.chain, positionUsd);
+    const amountRaw = await inputAmountRaw(s.chain, positionUsd);
     if (!input || !amountRaw) {
       console.log(`   ACTION  abort — no swap input asset configured for ${s.chain}`);
       return;
@@ -435,7 +435,7 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
           // RUGGED (liquidity pulled): retrying is pointless and the position is a total loss
           // — PNS500 reverted, then took eleven more attempts to admit defeat while gmgn's UI
           // still showed a $68k pool. One quote tells them apart in seconds.
-          const worth = await sellQuoteUsd(pos.chain, pos.token, raw).catch(() => null);
+          const worth = await sellQuoteUsd(pos.chain, pos.token, raw, pos.tokenDecimals).catch(() => null);
           if (worth !== null && worth < pos.costUsd * 0.1) {
             const line = `RUGGED ${pos.id} ${pos.token} — ${tokens.toLocaleString("en-US", { maximumFractionDigits: 0 })} tokens quote at only ${usd(worth)} against ${usd(pos.costUsd)} cost. Liquidity is gone; not retrying.`;
             console.log(`   [${pos.id}] *** ${line}`);

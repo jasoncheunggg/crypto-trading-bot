@@ -4,6 +4,22 @@ import type { Chain } from "./types.ts";
 /**
  * Token risk metrics, used to refuse one narrow shape of trade.
  *
+ * THE ONLY REMAINING gmgn DEPENDENCY IN v2.0, and it is deliberate. `token/security` is a DATA
+ * endpoint, unaffected by the 2026-09-08 reprice that made every `swap` call exceed the plan
+ * allowance and 429 — verified working that day while swap stayed blocked. It costs nothing on
+ * the current plan and sits nowhere near the trading path.
+ *
+ * It is kept for ONE field, `top_10_holder_rate`, because nothing else provides it: 0x has no
+ * holder data and Alchemy has no top-holders endpoint on the free tier. `is_open_source` rides
+ * the same response and is logged, never gated.
+ *
+ * Explicitly NOT used, measured against realised P&L over 55 tokens on 2026-09-08:
+ *   is_honeypot   fired on 9 tokens worth +$76.58, including the two best trades ever
+ *                 (+$41.88 / +101.2% and +$54.16 / +40.5%). Gating on it loses money.
+ *   is_show_alert fired on 10 tokens worth +$51.92.
+ * The honeypot question is answered instead by `roundTripProbe` in execution.ts, which asks
+ * whether the token can actually be sold rather than whether someone has labelled it.
+ *
  * The only rule here is: heavy holder concentration in a SMALL market cap. Measured across
  * all 88 tokens ever traded, five sat above 50% top-10 concentration and four of those were
  * legitimate — $1.2M to $5.3M tokens where whales genuinely hold half the supply and which

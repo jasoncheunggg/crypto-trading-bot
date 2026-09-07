@@ -5,6 +5,7 @@ import { rpc } from "./rpc.ts";
 import { tokenBalance, isNative, toRawUnits } from "./reconcile.ts";
 import type { Chain } from "./types.ts";
 import { gmgn, GmgnRateLimit } from "./gmgn.ts";
+import { ZeroExRouter } from "./router-0x.ts";
 
 const run = promisify(execFile);
 
@@ -65,10 +66,18 @@ const NATIVE = "0x0000000000000000000000000000000000000000";
  * wrong gas price is worse than no gas price: it silently corrupts every trade's P&L rather
  * than falling back to the estimate.
  */
+/** The wrapped native token, whose price in USDG IS the native price. Mirrors execution.ts's
+ *  INPUT table; kept local so live.ts does not import execution.ts (which imports this file). */
+const INPUT_WETH: Record<string, string> = {
+  robinhood: "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+};
+
 const GAS_TOKEN: Record<string, { chain: string; address: string }> = {
   robinhood: { chain: "robinhood", address: NATIVE },
   bsc: { chain: "bsc", address: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c" },
 };
+
+const zerox = new ZeroExRouter();
 
 const nativePrice = new Map<string, { usd: number; at: number }>();
 const NATIVE_PRICE_TTL_MS = 10 * 60_000;   // gas is cents; a 10-minute-old price is plenty
@@ -121,7 +130,7 @@ async function nativeUsdFromChain(chain: Chain): Promise<number | null> {
         return px;
       }
     }
-  } catch { /* fall through to gmgn */ }
+  } catch { /* fall through to 0x */ }
   return null;
 }
 
@@ -149,7 +158,7 @@ export async function nativeUsd(chain: Chain): Promise<number | null> {
   return refreshNative(chain);
 }
 
-/** Fetch and cache. Chain first, gmgn only if the chain cannot answer. */
+/** Fetch and cache. Chain first, 0x only if the chain cannot answer. */
 function refreshNative(chain: Chain): Promise<number | null> {
   const running = nativeInflight.get(chain);
   if (running) return running;
@@ -159,7 +168,7 @@ function refreshNative(chain: Chain): Promise<number | null> {
       nativePrice.set(chain, { usd: onChain, at: Date.now() });
       return onChain;
     }
-    return nativeUsdFromGmgn(chain);
+    return nativeUsdFrom0x(chain);
   })().finally(() => nativeInflight.delete(chain));
   nativeInflight.set(chain, p);
   return p;
@@ -170,18 +179,37 @@ export function warmNativeUsd(chain: Chain): void {
   void refreshNative(chain).catch(() => null);
 }
 
-async function nativeUsdFromGmgn(chain: Chain): Promise<number | null> {
-  const g = GAS_TOKEN[chain];
-  if (!g) return null;
-  try {
-    const stdout = await gmgn(["token", "info", "--chain", g.chain, "--address", g.address, "--raw"], 15_000);
-    const d = JSON.parse(stdout) as { price?: { price?: string } | string };
-    const raw = typeof d.price === "object" ? d.price?.price : d.price;
-    const usd = Number(raw);
-    if (!Number.isFinite(usd) || usd <= 0) return null;
-    nativePrice.set(chain, { usd, at: Date.now() });
-    return usd;
-  } catch { return null; }
+/**
+ * The chain's dollar stablecoin, for pricing native ETH when the log-derived route cannot.
+ *
+ * USDG on robinhood is 0x5fc5360d... at SIX decimals — not the eighteen every other token
+ * here uses, and not the mainnet USDG address (0xe343..., which has no code on chain 4663 at
+ * all). Both mistakes silently produce a price wrong by a factor of 10^12 or a dead lookup.
+ */
+const STABLE: Record<string, { address: string; decimals: number }> = {
+  robinhood: { address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", decimals: 6 },
+};
+
+/**
+ * Native price from 0x, by asking what one WETH fetches in USDG.
+ *
+ * Replaces the gmgn `token info` lookup v1.0 used. Verified 2026-09-08: $2,484.38 against
+ * gmgn's own $2,489.42, a 0.2% difference — well inside what this number is used for, which
+ * is converting wei to dollars for sizing and accounting rather than any price decision.
+ */
+async function nativeUsdFrom0x(chain: Chain): Promise<number | null> {
+  const input = INPUT_WETH[chain];
+  const stable = STABLE[chain];
+  if (!input || !stable) return null;
+  const q = await zerox.quote({
+    chain, inputToken: input, outputToken: stable.address,
+    amountIn: 1, inputDecimals: 18, outputDecimals: stable.decimals,
+    inputUsd: 0, slippagePct: 50, totalSupply: 0, signalFillPrice: null,
+  });
+  const usd = q?.outputAmount;
+  if (usd === undefined || !Number.isFinite(usd) || usd <= 0) return null;
+  nativePrice.set(chain, { usd, at: Date.now() });
+  return usd;
 }
 
 /** Gas burned by one transaction, in USD. Null if the receipt or the price is unavailable. */
