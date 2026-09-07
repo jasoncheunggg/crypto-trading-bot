@@ -5,6 +5,26 @@ import { config } from "./config.ts";
 const FILE = resolve(import.meta.dirname, "..", "state", "gastank.json");
 
 /**
+ * DORMANT UNDER v2.0 — kept because the accounting inside it is still correct.
+ *
+ * Under v1.0 the trading asset was USDG and gas was native ETH, two genuinely different
+ * assets, so running out of gas meant SWAPPING USDG for it — a routed trade with slippage and
+ * price risk, which is why this file exists and why it refuses to run with a position open.
+ *
+ * v2.0 trades from WETH. Gas is still native ETH, but the conversion between them is now
+ * WETH.withdraw() — 1:1 at a fixed contract, no routing, no slippage, no counterparty. The
+ * refill is nearly trivial, so the machinery that made a risky swap safe is mostly beside the
+ * point.
+ *
+ * What is NOT beside the point is `reserveUsdPerSwap` and `roundTripsLeft`: the distinction
+ * between what a swap COSTS and what must be HELD to submit one is unchanged, and getting it
+ * wrong reported 76 swaps of headroom on a wallet that could not submit one. Those stay.
+ *
+ * `topUpNeeded` returns null while `risk.autoGasTopUp.enabled` is false, which it is under
+ * v2.0. Rewiring it to unwrap WETH is Phase 3 work, once signing exists.
+ */
+
+/**
  * Keeps enough native token in the wallet to trade, by converting USDG when it runs low.
  *
  * A wallet rich in USDG but out of gas cannot SELL, and an unsellable position is the worst

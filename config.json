@@ -70,12 +70,13 @@
     },
     "maxConcurrentNote": "Lowered 3 -> 2 on 2026-09-03. Replaying all 147 recorded entries under each cap: cap 3 = 147 trades / $620.14, cap 2 = 142 trades / $628.68, cap 1 = 113 trades / $539.53. The 5 entries a cap of 2 blocks were collectively -$8.54, so it costs nothing measurable while cutting peak GMGN polling from 5 tokens to 4 (2.5 -> 2.0 req/s against a 5/s IP limit). Cap 1 is genuinely worse, forfeiting $80.60.",
     "autoGasTopUp": {
-      "enabled": true,
+      "enabled": false,
       "belowRoundTrips": 8,
       "targetRoundTrips": 25,
       "maxUsdPerTopUp": 40,
       "minUsdgReserve": 50,
-      "note": "Converts USDG to native when gas runs low, so the bot cannot end up rich in USDG and unable to SELL - the worst failure this system has. Average gas is MEASURED from receipts (last 20 swaps), not taken from gasUsdPerSwap, which read $0.525 while the live session averaged $0.691 and one multi-hop swap cost $2.72. Only ever runs with the book FLAT: a conversion while a position is open races that position's exit for the same gmgn rate limit, and a 31s block on an exit cost $3.87 once. Also capped at 3 per day with a 15-minute cooldown, and refuses below $10 because a $1 test conversion lost 21% to gas. Set enabled=true to switch on."
+      "note": "Converts USDG to native when gas runs low, so the bot cannot end up rich in USDG and unable to SELL - the worst failure this system has. Average gas is MEASURED from receipts (last 20 swaps), not taken from gasUsdPerSwap, which read $0.525 while the live session averaged $0.691 and one multi-hop swap cost $2.72. Only ever runs with the book FLAT: a conversion while a position is open races that position's exit for the same gmgn rate limit, and a 31s block on an exit cost $3.87 once. Also capped at 3 per day with a 15-minute cooldown, and refuses below $10 because a $1 test conversion lost 21% to gas. Set enabled=true to switch on.",
+      "v2Note": "Disabled under v2.0. It converts USDG->native by SWAP, and v2.0 holds no USDG. The equivalent refill is WETH.withdraw(), which is 1:1 at a fixed contract rather than a routed trade — it needs signing, so it is Phase 3 work. reserveUsdPerSwap and roundTripsLeft remain live and are unaffected."
     },
     "maxGasGwei": 1.2,
     "maxGasGweiNote": "Refuse new ENTRIES above this gas price. Exits are never blocked - refusing to sell is the unbounded failure. Derived 2026-09-04 from 48 live trades: mean gross edge is $2.68/trade before gas, and at the measured median of 356,561 gas units a round trip costs $0.70 at 0.4 gwei, $1.75 at 1.0, $2.63 at 1.5 (breakeven) and $3.50 at 2.0 (a guaranteed $0.83 loss). 1.2 sits below breakeven and just above the p90 of 0.968 gwei across 113 real swaps, so it blocks almost nothing historically traded while cutting off everything that loses. SCALES WITH POSITION SIZE: at $50 positions breakeven moves to ~3.0 gwei, so raise this if sizing up. Coarse by design - it uses gwei alone, while the p90 route burns 1,033,769 units and loses money well below this line; the precise version would gate on the quotes own gas_limit."
