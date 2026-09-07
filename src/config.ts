@@ -85,6 +85,7 @@ export const config = {
   exit: raw.exit,
   livePriceFeed: (raw.exit as { livePriceFeed?: { enabled?: boolean } }).livePriceFeed ?? { enabled: false },
   risk: raw.risk,
+  execution: (raw.execution ?? {}) as { router?: string },
   alchemy: (raw.alchemy ?? {}) as { cuBudgetPerMonth?: number; alreadyUsedThisMonth?: number },
   mode: raw.mode,
 };

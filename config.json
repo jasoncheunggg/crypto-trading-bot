@@ -330,7 +330,10 @@
     "provider": "gmgn",
     "transport": "http",
     "note": "Call the GMGN HTTP API directly. The CLI costs 429-766ms of Node startup per invocation, twice per entry.",
-    "requireAllowAutomatedTradesEnvVar": true
+    "requireAllowAutomatedTradesEnvVar": true,
+    "router": "liqd",
+    "routerNote": "Which router prices and builds swaps: \"liqd\" (api.liqd.ag) or \"gmgn\" (gmgn-cli). v1.0 was gmgn-only and could not trade at all when their API returned 429 to every request for over a day — no quote means no price, no tier, no minimum output, no calldata. liqd needs no API key, has no observed rate limit, takes no forced fee against gmgns 1.00% per side, returns UNSIGNED calldata so we hold our own key, and refused the honeypot gmgn priced at $91.05 while it was worth $1.07.",
+    "inputAssetNote": "v2.0 trades from WETH, not USDG. The new wallet holds native ETH and could not reliably receive USDG, and liqd will not route native (only WETH), so ETH is wrapped once at 58,459 gas and held as WETH. Gas is still paid in native ETH, so a small native balance is kept. Unlike USDG<->ETH this conversion is 1:1 at a fixed contract — no routing, no slippage, no price risk."
   },
   "rateLimit": {
     "gmgnMaxRequestsPerSecond": 10,

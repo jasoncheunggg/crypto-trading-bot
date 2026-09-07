@@ -3,6 +3,8 @@ import { promisify } from "node:util";
 import { config } from "./config.ts";
 import type { Chain } from "./types.ts";
 import { gmgn, GmgnRateLimit } from "./gmgn.ts";
+import { LiqdRouter } from "./router-liqd.ts";
+import { nativeUsd } from "./live.ts";
 
 const run = promisify(execFile);
 
@@ -13,13 +15,27 @@ const run = promisify(execFile);
  * (HTTP 401), because GMGN's currency table lists only BNB and USDC for bsc.
  * A stablecoin is chosen so a USD position size maps 1:1 to an input amount.
  */
+/**
+ * What we spend. v2.0 trades from WETH, not USDG.
+ *
+ * Three reasons, all forced rather than chosen: the self-custodied wallet holds native ETH and
+ * could not reliably receive USDG; liqd will not route native at all (only the wrapped token);
+ * and holding one asset removes the USDG<->ETH conversion machinery entirely. Wrapping is 1:1
+ * at a fixed contract — 58,459 gas, no routing, no slippage, no price risk — unlike the USDG
+ * swaps the gas tank used to perform.
+ *
+ * Gas is still paid in NATIVE ETH, so the wallet keeps a native balance alongside the WETH.
+ */
 const INPUT: Record<string, { address: string; decimals: number; symbol: string }> = {
-  robinhood: { address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", decimals: 6, symbol: "USDG" },
+  robinhood: { address: "0x0bd7d308f8e1639fab988df18a8011f41eacad73", decimals: 18, symbol: "WETH" },
   bsc: { address: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", decimals: 18, symbol: "USDC" },
 };
 
 /** Wallet bound to the GMGN API key — swaps must originate from it. From WALLET_ADDRESS. */
 const FROM = config.entry.walletAddress as string;
+
+/** One instance; it holds no state beyond the base URL. */
+const liqd = new LiqdRouter();
 
 export interface Quote {
   inputUsd: number;
@@ -46,6 +62,21 @@ export async function quote(
 ): Promise<Quote | null> {
   const input = INPUT[chain];
   if (!input) return null;
+
+  // liqd prices in HUMAN units of the input token, and the input is now WETH — so a USD
+  // position size has to be converted through the native price. gmgn took a raw USDG amount,
+  // where USD and token units happened to coincide; that coincidence is gone.
+  if (config.execution.router === "liqd") {
+    const px = await nativeUsd(chain);
+    if (px === null || px <= 0) return null;          // no price, no size — refuse rather than guess
+    const q = await liqd.quote({
+      chain, inputToken: input.address, outputToken: token,
+      amountIn: positionUsd / px, inputDecimals: input.decimals, outputDecimals: tokenDecimals,
+      inputUsd: positionUsd, slippagePct: config.entry.swapSlippageTolerancePct as number,
+      totalSupply, signalFillPrice,
+    });
+    return q as Quote | null;
+  }
 
   const amount = BigInt(Math.floor(positionUsd * 10 ** input.decimals)).toString();
   try {
