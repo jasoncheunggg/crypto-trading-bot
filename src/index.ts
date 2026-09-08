@@ -339,8 +339,10 @@ async function onSignal(s: Signal): Promise<void> {
     // number describes a trade that did not happen.
     const r = out.result;
     tokensOut = r.outputAmount ?? r.balanceDelta ?? q.outputAmount;
-    costUsd = r.inputAmount ?? q.inputUsd;
-    fillPrice = r.fillPrice ?? (tokensOut > 0 ? costUsd / tokensOut : q.fillPrice);
+    // r.inputUsd, never r.inputAmount: the input is native ETH now, so the raw amount is a
+    // quantity of ETH and recording it as dollars understates a $5 entry as $0.002.
+    costUsd = r.inputUsd ?? q.inputUsd;
+    fillPrice = tokensOut > 0 ? costUsd / tokensOut : q.fillPrice;
     entryTxHash = r.hash;
     entryOrderId = r.orderId;
     entryGasUsd = r.gasUsd;
@@ -488,7 +490,11 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
           if (worth !== null) console.log(`   [${pos.id}] sell failed but the token still quotes at ${usd(worth)} — treating as transient`);
           return { ok: false as const, error: r.error ?? `status ${r.status}` };
         }
-        const gross = r.outputAmount ?? 0;
+        // r.outputUsd, never r.outputAmount: a sell pays out in native ETH, so the raw amount
+        // is a quantity of ETH. Undefined means the price was unreadable, which must not be
+        // silently recorded as proceeds of zero.
+        const gross = r.outputUsd;
+        if (gross === undefined) return { ok: false as const, error: "settled but the native price was unreadable — RECONCILE" };
         if (gross <= 0) return { ok: false as const, error: "settled with no proceeds" };
         // Gas is deducted HERE and nowhere else. It is paid in native currency, so it never
         // touches the settled output amount — but the platform and DEX fees already have, so

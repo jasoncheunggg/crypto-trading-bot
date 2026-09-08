@@ -39,6 +39,20 @@ export interface SwapResult {
   /** Settled amounts, in whole units. Only set when ok. */
   inputAmount?: number;
   outputAmount?: number;
+  /**
+   * USD value of the two legs. Set ONLY for the leg denominated in the chain's own coin,
+   * because that is the only one whose USD value this function can know.
+   *
+   * These exist because v1.0 spent USDG, so `inputAmount` was already dollars and every caller
+   * treated it as such. v2.0 spends native ETH, and on 2026-09-08 that recorded a $5.19 entry
+   * as costUsd 0.00208 — the ETH figure. Everything downstream inherited it: the entry price
+   * came out 2,362x low, the take-profit and stop were computed against it, the price feed
+   * (which reports USD) then looked 2,362x too high and logged a 248,494% peak, and the sell's
+   * min-output floor was 119x above what the token could fetch, so every exit was refused and
+   * the position stuck. One wrong unit, five wrong behaviours.
+   */
+  inputUsd?: number;
+  outputUsd?: number;
   /** Realised price: input per output unit. */
   fillPrice?: number;
   /**
@@ -327,6 +341,24 @@ export async function executeSwap(
   const inputAmount = inputBefore !== null && inputAfter !== null ? inputBefore - inputAfter : undefined;
   const outputAmount = delta > 0 ? delta : undefined;
 
+  /**
+   * Priceable at the native rate: the chain's own coin, and its wrapper.
+   *
+   * WETH is included deliberately. v2.0 trades native, but a rescue or a manual tool can still
+   * settle into WETH, and `isNative` alone leaves outputUsd undefined for it — which makes an
+   * exit that worked perfectly report "the native price was unreadable". They are 1:1 by
+   * construction, so one rate prices both.
+   */
+  const ethLike = (t: string) =>
+    isNative(t) || t.toLowerCase() === (INPUT_WETH[chain] ?? "").toLowerCase();
+
+  // Deliberately left undefined rather than guessed when the price is unavailable: a caller
+  // that records `undefined` fails loudly, whereas one handed a number in the wrong currency
+  // records a plausible lie — which is exactly what happened.
+  const nativePx = await nativeUsd(chain);
+  const inputUsd = ethLike(inputToken) && nativePx ? (inputAmount ?? 0) * nativePx : undefined;
+  const outputUsd = ethLike(outputToken) && nativePx ? (outputAmount ?? 0) * nativePx : undefined;
+
   // Approve what we just BOUGHT, now, while nothing is waiting on it. The exit is the one
   // moment where an extra transaction costs the most, and a sell blocked on a missing
   // approval is how a managed position becomes an unmanaged one. Deliberately not awaited
@@ -340,8 +372,12 @@ export async function executeSwap(
   return {
     ok: true, hash: sent.hash, status: "confirmed",
     minedOk: true, balanceConfirmed: delta > 0, balanceDelta: delta,
-    inputAmount, outputAmount, gasUsd,
-    fillPrice: inputAmount && outputAmount && outputAmount > 0 ? inputAmount / outputAmount : undefined,
+    inputAmount, outputAmount, inputUsd, outputUsd, gasUsd,
+    // USD per unit of output when we can price the input, raw ratio otherwise. For an entry
+    // that is dollars-per-token, which is what entryPrice must be.
+    fillPrice: outputAmount && outputAmount > 0
+      ? (inputUsd ?? inputAmount ?? 0) / outputAmount
+      : undefined,
   };
 }
 
