@@ -202,3 +202,26 @@ export async function zeroExSwapTx(a: {
     minBuyAmount: BigInt(b.minBuyAmount),
   };
 }
+
+/**
+ * The signable transaction already inside a RouteQuote.
+ *
+ * `quote()` calls /swap/allowance-holder/quote, which returns the calldata AND the floor —
+ * so re-quoting before broadcast asks 0x the same question twice and pays for the answer in
+ * price drift. On 2026-09-08 that cost a real entry: the quote said 1,111.08 tokens, the floor
+ * was set at 92% of it, and by the third sequential call (~2.3s later, on a token that had
+ * just absorbed a $3,860 buy) no route could still clear that floor. Every gate had passed and
+ * our fill was 3% BETTER than the tracked wallet's.
+ */
+export function swapTxFromQuote(q: RouteQuote): ZeroExSwapTx | null {
+  const b = q.raw as ZeroExResponse;
+  const t = b?.transaction;
+  if (!t?.to || !t.data || !b.buyAmount || !b.minBuyAmount) return null;
+  return {
+    to: t.to, data: t.data,
+    value: BigInt(t.value ?? "0"),
+    gas: BigInt(t.gas ?? "0"),
+    buyAmount: BigInt(b.buyAmount),
+    minBuyAmount: BigInt(b.minBuyAmount),
+  };
+}

@@ -5,6 +5,7 @@ import { rpc } from "./rpc.ts";
 import { tokenBalance, isNative, toRawUnits } from "./reconcile.ts";
 import type { Chain } from "./types.ts";
 import { ZeroExRouter, zeroExSwapTx } from "./router-0x.ts";
+import type { ZeroExSwapTx } from "./router-0x.ts";
 import { send, account, tradingBlocked, ensureAllowance } from "./signer.ts";
 
 const run = promisify(execFile);
@@ -247,6 +248,18 @@ export async function executeSwap(
    * Omitted for stops and cutoffs, where failing to sell is the worse outcome.
    */
   minOutputRaw?: string,
+  /**
+   * The transaction from the quote the GATES ALREADY APPROVED, with the moment it was taken.
+   *
+   * Re-quoting here asks 0x the same question a second and third time and pays for it in price
+   * drift. That cost a real entry on 2026-09-08: the floor was measured against the first quote
+   * and validated against the third, ~2.3s later, and no route could still clear it — on a
+   * signal where every gate had passed and our fill was 3% better than the tracked wallet's.
+   *
+   * Reusing it means one price, one floor and one transaction. Dropped if it has gone stale,
+   * because a quote is a price and prices expire.
+   */
+  prebuilt?: { tx: ZeroExSwapTx; at: number },
 ): Promise<SwapResult> {
   const blocked = tradingBlocked();
   if (blocked) return { ok: false, error: `refused: ${blocked}` };
@@ -265,7 +278,8 @@ export async function executeSwap(
     if (!allow.ok) return { ok: false, error: `refused: ${allow.error ?? "could not approve input token"}` };
   }
 
-  let tx = await zeroExSwapTx({
+  const fresh = prebuilt && Date.now() - prebuilt.at <= QUOTE_MAX_AGE_MS ? prebuilt.tx : null;
+  let tx = fresh ?? await zeroExSwapTx({
     chain, sellToken: inputToken, buyToken: outputToken,
     sellAmountRaw: amountRaw, slippageBps: Math.round(slippagePct * 100), taker: from,
   });
@@ -370,12 +384,18 @@ export type EntryOutcome =
  * the market and manufactures stop-outs on trades that never moved against us (SLINK,
  * 2026-09-04: filled 15.9% high, stopped 11 seconds later, -3.5%).
  */
+/** How long a quote may be reused before it is treated as a price rather than a fact. One
+ *  0x call is ~780ms, so this allows the natural gap between quoting and submitting without
+ *  ever broadcasting against a price older than a couple of blocks. */
+const QUOTE_MAX_AGE_MS = 4_000;
+
 const MIN_FILL_RATIO = 0.92;
 
 export async function attemptEntry(
   chain: Chain, inputToken: string, outputToken: string,
   amountRaw: string, slippagePct: number, expectedOut: number,
   outputDecimals = 18,
+  prebuilt?: { tx: ZeroExSwapTx; at: number },
 ): Promise<EntryOutcome> {
   const before = (await tokenBalance(chain, outputToken).catch(() => null)) ?? 0;
   // Floor in RAW units, built with toRawUnits rather than float maths: an 18-decimal amount
@@ -384,7 +404,7 @@ export async function attemptEntry(
   const minOut = expectedOut > 0
     ? toRawUnits(expectedOut * MIN_FILL_RATIO, outputDecimals).toString()
     : undefined;
-  const r = await executeSwap(chain, inputToken, outputToken, amountRaw, slippagePct, 90_000, minOut);
+  const r = await executeSwap(chain, inputToken, outputToken, amountRaw, slippagePct, 90_000, minOut, prebuilt);
 
   if (r.ok) {
     const got = r.outputAmount ?? r.balanceDelta ?? 0;

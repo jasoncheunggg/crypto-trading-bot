@@ -4,6 +4,7 @@ import { config, describe, maxSlippagePctFor, entrySlippageCap } from "./config.
 import { Detector } from "./detector.ts";
 import { planEntry } from "./entry.ts";
 import { quote, inputSymbol, inputAsset, inputAmountRaw, sellQuoteUsd } from "./execution.ts";
+import { swapTxFromQuote } from "./router-0x.ts";
 import { attemptEntry, executeSwap, nativeUsd, warmNativeUsd } from "./live.ts";
 import { open as openPosition, close as closePosition, all as allPositions, push as positionsPush, tierFor } from "./positions.ts";
 import { reconcilePosition, tokenBalanceRaw, toRawUnits, tokenBalance, NATIVE_ADDRESS as NATIVE_TOKEN } from "./reconcile.ts";
@@ -222,6 +223,7 @@ async function onSignal(s: Signal): Promise<void> {
   // Fired ALONGSIDE the quote, not after it. The security lookup takes ~448ms against the
   // quote's ~606ms, so running them together costs nothing on a path already spending ~3s
   // between signal and fill. Sequential, it would be a 15% latency tax on every entry.
+  const quotedAt = Date.now();
   const [q, risk, codeBytes] = await Promise.all([
     quote(s.chain, s.token, positionUsd, s.tokenDecimals, supply, signalPrice),
     tokenRisk(s.chain, s.token),
@@ -309,16 +311,22 @@ async function onSignal(s: Signal): Promise<void> {
     // sell side is deliberately loose for the opposite reason — see manage().
     // s.tokenDecimals matters: the floor is built in RAW units, and an 18-decimal default on
     // a 6-decimal token would ask for 10^12 times too much and revert every buy.
-    const attempt = () => attemptEntry(s.chain, input.address, s.token, amountRaw,
-      config.entry.swapSlippageTolerancePct, q.outputAmount, s.tokenDecimals);
+    // Hand the quote's OWN transaction down rather than letting executeSwap re-quote. The
+    // gates approved a specific price; broadcasting a different one, taken 2.3s later, is how
+    // an entry that passed every check refused itself on 2026-09-08. Stale quotes are dropped
+    // inside executeSwap, so the retry below re-prices rather than replaying an old fill.
+    const prebuilt = swapTxFromQuote(q);
+    const attempt = (reuse: boolean) => attemptEntry(s.chain, input.address, s.token, amountRaw,
+      config.entry.swapSlippageTolerancePct, q.outputAmount, s.tokenDecimals,
+      reuse && prebuilt ? { tx: prebuilt, at: quotedAt } : undefined);
 
-    let out = await attempt();
+    let out = await attempt(true);
     // Retry ONLY on no-fill, which is claimed only when both chain checks agree nothing
     // landed. Every ambiguous outcome is "error" and is left alone: doubling a position that
     // already exists, with nothing recording the first half, is worse than missing the trade.
     if (out.kind === "no-fill") {
       console.log(`   entry   no fill (${out.reason}) — one retry`);
-      out = await attempt();
+      out = await attempt(false);
     }
     if (out.kind === "no-fill" || out.kind === "error") {
       console.log(`   ACTION  abort — entry ${out.kind}: ${out.reason}`);
