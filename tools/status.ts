@@ -17,6 +17,7 @@ import { resolve } from "node:path";
 import { config } from "../src/config.ts";
 
 const VALUE = process.argv.includes("--value");
+const DEMO = process.argv.includes("--demo");
 const { account, publicClient, ALLOWANCE_HOLDER } = await import("../src/signer.ts");
 const { zeroExSwapTx } = await import("../src/router-0x.ts");
 const { rpc } = await import("../src/rpc.ts");
@@ -38,7 +39,14 @@ async function call(to: string, data: string): Promise<bigint> {
     return BigInt(r.data ?? "0x0");
   } catch { return 0n; }
 }
-const balOf = (t: string, who: string) => call(t, "0x70a08231" + pad(who));
+/** In --demo, the synthetic positions report the balance they claim, so the reconciliation
+ *  line under them exercises the real comparison rather than trivially failing against zero. */
+const demoHeld = new Map<string, bigint>();
+const balOf = async (t: string, who: string): Promise<bigint> => {
+  const d = demoHeld.get(t.toLowerCase());
+  if (d !== undefined && who.toLowerCase() === acct.address.toLowerCase()) return d;
+  return call(t, "0x70a08231" + pad(who));
+};
 
 async function tokenBalances(who: string): Promise<{ token: string; raw: bigint }[]> {
   const r = await rpc<{ tokenBalances?: { contractAddress: string; tokenBalance: string }[] }>(
@@ -68,7 +76,48 @@ interface Position {
 const read = <T,>(f: string, d: T): T => {
   try { return JSON.parse(readFileSync(resolve(S, f), "utf8")) as T; } catch { return d; }
 };
+// Priced before the demo block, which derives its cost basis from a live mark.
+const oneWethEarly = await zeroExSwapTx({
+  chain: CHAIN, sellToken: WETH, buyToken: USDG,
+  sellAmountRaw: (10n ** 18n).toString(), slippageBps: 500, taker: acct.address,
+});
+const ethUsdEarly = oneWethEarly ? Number(oneWethEarly.buyAmount) / 1e6 : 0;
+
 const positions = read<Position[]>("positions.json", []);
+
+/**
+ * --demo: three synthetic positions so every rendering path is visible on a flat book.
+ *
+ * The ENTRY is invented; the MARK is not. 0x prices any amount whether or not the wallet
+ * holds it, so the P&L, the distance to target and the breakeven comparison are computed
+ * against live routes. Only the cost basis is fiction, and it is derived backwards from the
+ * live mark so the percentages land where the demo intends.
+ */
+if (DEMO) {
+  const spec = [
+    { token: "0x16391c40e85fb2246a2c8c17bfa2594c5d3ef84b", dec: 18, held: 8000, pct: 0.18, tp: 30, sl: 20, who: "@orangie (evm)", age: 14, drift: 1 },
+    { token: "0x0145acbccefbed6f303c420beeaaac72e905430b", dec: 18, held: 42000, pct: -0.12, tp: 40, sl: 20, who: "@frankdegods (evm)", age: 31, drift: 1 },
+    { token: "0x12d5ee7917ca430073c3a638ee1e6f0648a98a01", dec: 18, held: 1800, pct: 0.05, tp: 30, sl: 20, who: "@lizzerd (evm)", age: 3, drift: 0.72 },
+  ];
+  for (const x of spec) {
+    const raw = BigInt(Math.floor(x.held * 10 ** x.dec));
+    demoHeld.set(x.token.toLowerCase(), raw);
+    const w = await markWeth(x.token, raw);
+    const nowUsd = w === null ? 0 : w * ethUsdEarly;
+    const cost = nowUsd / (1 + x.pct);
+    positions.push({
+      id: "demo-" + x.token.slice(2, 10), token: x.token, status: "open", paper: false,
+      openedAt: Math.floor(Date.now() / 1000) - x.age * 60,
+      costUsd: cost, tokenAmount: x.held, remainingAmount: x.held * x.drift,
+      entryPrice: cost / x.held, tokenDecimals: x.dec,
+      takeProfitPct: x.tp, stopLossPct: x.sl,
+      breakevenPrice: (cost / x.held) * 1.021,
+      peakPct: x.pct > 0 ? x.pct * 100 + 9 : 4.2, troughPct: x.pct < 0 ? x.pct * 100 - 3 : -1.8,
+      sourceWalletName: x.who,
+    });
+  }
+  console.log("\n\x1b[33m*** --demo: three SYNTHETIC positions. Entry invented, marks live. ***\x1b[0m");
+}
 
 // ---------------------------------------------------------------- wallets
 const [ethBal, weth, usdg, allowance, gas, nonce] = await Promise.all([
@@ -80,12 +129,8 @@ const [ethBal, weth, usdg, allowance, gas, nonce] = await Promise.all([
   pub.getTransactionCount({ address: acct.address }),
 ]);
 
-// ETH price from 1 WETH -> USDG, the same route nativeUsd uses.
-const oneWethTx = await zeroExSwapTx({
-  chain: CHAIN, sellToken: WETH, buyToken: USDG,
-  sellAmountRaw: (10n ** 18n).toString(), slippageBps: 500, taker: acct.address,
-});
-const ethUsd = oneWethTx ? Number(oneWethTx.buyAmount) / 1e6 : 0;
+// Same route nativeUsd uses. Fetched once, above, because --demo needs it first.
+const ethUsd = ethUsdEarly;
 const toUsd = (w: number) => w * ethUsd;
 
 console.log("\n\x1b[1mWALLET\x1b[0m  " + acct.address + "  \x1b[2m(self-custody, signable)\x1b[0m");
