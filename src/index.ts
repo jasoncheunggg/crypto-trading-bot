@@ -35,7 +35,7 @@ const usd = (n: number) => "$" + n.toLocaleString("en-US", { maximumFractionDigi
 function liveTrading(): boolean {
   return config.mode.dryRun === false
     && config.mode.logOnly === false
-    && process.env["GMGN_ALLOW_AUTOMATED_TRADES"] === "1";
+    && process.env["BOT_ALLOW_AUTOMATED_TRADES"] === "1";
 }
 const t = () => new Date().toISOString().replace("T", " ").slice(0, 19) + "Z";
 const STATE = resolve(import.meta.dirname, "..", "state");

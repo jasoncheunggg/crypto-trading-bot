@@ -5,7 +5,8 @@ import { rpc } from "./rpc.ts";
 import { tokenBalance, isNative, toRawUnits } from "./reconcile.ts";
 import type { Chain } from "./types.ts";
 import { gmgn, GmgnRateLimit } from "./gmgn.ts";
-import { ZeroExRouter } from "./router-0x.ts";
+import { ZeroExRouter, zeroExSwapTx } from "./router-0x.ts";
+import { send, account, tradingBlocked, ensureAllowance } from "./signer.ts";
 
 const run = promisify(execFile);
 
@@ -325,58 +326,98 @@ export async function executeSwap(
   /**
    * ABSOLUTE floor on what the swap may return, in the output token's raw units.
    *
-   * `--slippage` is a percentage of GMGN's OWN quote at submission time, not of the price we
-   * decided at. When the market falls between the two, the tolerance is measured from the
-   * lower base and the fill can land far below where we thought the floor was: a take-profit
-   * "bounded to breakeven" at 23.7% settled 46% under its trigger and booked -29.66%.
+   * A percentage tolerance does not bind. Under gmgn it was applied to THEIR re-quote at
+   * submission, so a price move between our decision and the submit window filled at the new
+   * price however far it ran: measured fills of 79.7%, 86.3%, 89.4% and 89.7% against a
+   * nominal 5%. Under 0x the same hazard exists in a different shape — slippageBps is applied
+   * to the quote 0x returns at THAT moment, not to the price the gates approved.
    *
-   * A min-output is measured from nothing — it is the number of tokens we refuse to go below.
-   * It is the only way to make "this exit cannot lose money" true rather than approximate.
+   * So this floor is enforced by REQUOTING until 0x's own minBuyAmount clears it, and refusing
+   * if it cannot. That makes "this exit cannot return less than X" true rather than approximate.
    *
    * Omitted for stops and cutoffs, where failing to sell is the worse outcome.
    */
   minOutputRaw?: string,
 ): Promise<SwapResult> {
-  if (config.mode.dryRun !== false) {
-    return { ok: false, error: "refused: mode.dryRun is not false" };
-  }
-  if (process.env["GMGN_ALLOW_AUTOMATED_TRADES"] !== "1") {
-    return { ok: false, error: "refused: GMGN_ALLOW_AUTOMATED_TRADES is not set to 1" };
-  }
-  const from = config.entry.walletAddress as string | undefined;
-  if (!from) return { ok: false, error: "refused: no entry.walletAddress configured" };
+  const blocked = tradingBlocked();
+  if (blocked) return { ok: false, error: `refused: ${blocked}` };
+
+  const from = account().address;
 
   // Snapshot BEFORE submitting — the balance check is a comparison, not an absolute.
   const balanceBefore = (await tokenBalance(chain, outputToken).catch(() => null)) ?? 0;
   const inputBefore = await tokenBalance(chain, inputToken).catch(() => null);
 
-  let submitted: { status?: string; hash?: string; order_id?: string };
-  try {
-    const stdout = await gmgn([
-      "swap", "--chain", chain, "--from", from,
-      "--input-token", inputToken, "--output-token", outputToken,
-      "--amount", amountRaw, "--slippage", String(slippagePct),
-      ...(minOutputRaw ? ["--min-output", minOutputRaw] : []),
-      "--yes", "--raw",
-    ], 60_000);
-    // gmgn prints a confirmation banner before the JSON; take the last brace-delimited chunk.
-    const json = stdout.slice(stdout.indexOf("{", stdout.lastIndexOf("\n{") >= 0 ? stdout.lastIndexOf("\n{") : 0));
-    submitted = JSON.parse(json.trim());
-  } catch (err) {
-    // A rate limit is NOT a market outcome and must never be retried. Reported with its own
-    // status so attemptEntry classifies it as `error` rather than `no-fill`: 13 retries into
-    // an active limit is what turned a 30-second throttle into a 5-minute ban, during which a
-    // live position could not be sold at all.
-    if (err instanceof GmgnRateLimit) {
-      return { ok: false, status: "rate_limited", error: err.message };
+  // The input token must be approved before 0x can move it. WETH is approved once at setup,
+  // but every token we BUY needs its own approval before it can be SOLD — see ensureAllowance.
+  // Checked here rather than only at exit so a missing approval fails loudly and early.
+  const allow = await ensureAllowance(chain, inputToken, BigInt(amountRaw));
+  if (!allow.ok) return { ok: false, error: `refused: ${allow.error ?? "could not approve input token"}` };
+
+  let tx = await zeroExSwapTx({
+    chain, sellToken: inputToken, buyToken: outputToken,
+    sellAmountRaw: amountRaw, slippageBps: Math.round(slippagePct * 100), taker: from,
+  });
+  if (!tx) return { ok: false, error: "0x returned no route" };
+
+  // Tighten to OUR floor if 0x's is looser. One requote, derived from the floor rather than
+  // guessed: if we need F of an expected B, the tolerance that produces it is 1 - F/B.
+  if (minOutputRaw) {
+    const floor = BigInt(minOutputRaw);
+    if (tx.minBuyAmount < floor) {
+      if (tx.buyAmount <= floor) {
+        return {
+          ok: false,
+          error: `refused: 0x quotes ${tx.buyAmount} but the floor is ${floor} — the price moved past our decision`,
+        };
+      }
+      const bps = Number((tx.buyAmount - floor) * 10_000n / tx.buyAmount);
+      const tighter = await zeroExSwapTx({
+        chain, sellToken: inputToken, buyToken: outputToken,
+        sellAmountRaw: amountRaw, slippageBps: Math.max(1, bps), taker: from,
+      });
+      if (!tighter || tighter.minBuyAmount < floor) {
+        return { ok: false, error: `refused: could not obtain a route with minOutput >= ${floor}` };
+      }
+      tx = tighter;
     }
-    return { ok: false, error: `submit failed: ${err instanceof Error ? err.message : String(err)}` };
   }
-  if (!submitted.order_id) {
-    return { ok: false, error: `no order_id in response: ${JSON.stringify(submitted).slice(0, 200)}` };
+
+  const sent = await send({
+    chain, to: tx.to, data: tx.data, value: tx.value, gas: tx.gas, label: "swap",
+  });
+  if (!sent.ok) {
+    // A simulation revert is deterministic against current state — the pool is identical a
+    // second later, so a retry cannot succeed. Reported distinctly so attemptEntry does not
+    // spend retries on it.
+    const status = sent.error?.startsWith("simulation reverted") ? "sim_reverted" : undefined;
+    return { ok: false, status, error: sent.error };
   }
-  return confirm(chain, submitted.order_id, submitted.hash, outputToken, balanceBefore,
-    settleTimeoutMs, inputToken, inputBefore);
+
+  const gasUsd = await gasUsdFor(chain, String(sent.gasUsed ?? 0n), String(sent.effectiveGasPrice ?? 0n));
+
+  const balanceAfter = (await tokenBalance(chain, outputToken).catch(() => null)) ?? balanceBefore;
+  const delta = balanceAfter - balanceBefore;
+  const inputAfter = await tokenBalance(chain, inputToken).catch(() => null);
+  const inputAmount = inputBefore !== null && inputAfter !== null ? inputBefore - inputAfter : undefined;
+  const outputAmount = delta > 0 ? delta : undefined;
+
+  // Approve what we just BOUGHT, now, while nothing is waiting on it. The exit is the one
+  // moment where an extra transaction costs the most, and a sell blocked on a missing
+  // approval is how a managed position becomes an unmanaged one. Deliberately not awaited
+  // for its result beyond logging: executeSwap re-checks on the way out regardless.
+  if (delta > 0) {
+    void ensureAllowance(chain, outputToken, 2n ** 255n)
+      .then((a) => { if (a.approved) console.log(`   approve ${outputToken} for exit — ${a.hash}`); })
+      .catch(() => undefined);
+  }
+
+  return {
+    ok: true, hash: sent.hash, status: "confirmed",
+    minedOk: true, balanceConfirmed: delta > 0, balanceDelta: delta,
+    inputAmount, outputAmount, gasUsd,
+    fillPrice: inputAmount && outputAmount && outputAmount > 0 ? inputAmount / outputAmount : undefined,
+  };
 }
 
 /** Why an entry attempt ended, and whether retrying is SAFE. */

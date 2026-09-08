@@ -48,10 +48,10 @@ const CHAIN_ID: Record<string, number> = { robinhood: 4663 };
 
 interface ZeroExResponse {
   liquidityAvailable?: boolean;
-  buyAmount?: string;
-  minBuyAmount?: string;
   allowanceTarget?: string;
   transaction?: { to: string; data: string; value: string; gas?: string; gasPrice?: string };
+  buyAmount?: string;
+  minBuyAmount?: string;
   route?: { fills?: { source?: string; proportionBps?: string }[] };
   tokenMetadata?: {
     buyToken?: { buyTaxBps?: string; sellTaxBps?: string; transferTaxBps?: string };
@@ -143,4 +143,62 @@ export class ZeroExRouter implements Router {
     const n = g ? Number(g) : NaN;
     return Number.isFinite(n) && n > 0 ? n : null;
   }
+}
+
+export interface ZeroExSwapTx {
+  to: string;
+  data: string;
+  value: bigint;
+  gas: bigint;
+  /** Expected output, raw units. */
+  buyAmount: bigint;
+  /** The floor 0x baked into the calldata, raw units. Enforced on chain. */
+  minBuyAmount: bigint;
+}
+
+/**
+ * A signable swap, priced from RAW input units.
+ *
+ * Separate from `quote()` because execution and decision want different things: `quote()`
+ * answers "what would this cost in USD and what market cap does that imply", which needs a
+ * native price and a total supply. This answers "give me the transaction", which needs
+ * neither and must not fail because a price lookup did.
+ *
+ * `taker` MUST be the wallet that will sign. 0x builds the calldata around it, and a
+ * transaction built for one address and sent from another does not merely misreport — it can
+ * revert after the gas is spent.
+ */
+export async function zeroExSwapTx(a: {
+  chain: Chain; sellToken: string; buyToken: string;
+  sellAmountRaw: string; slippageBps: number; taker: string;
+}): Promise<ZeroExSwapTx | null> {
+  const chainId = CHAIN_ID[a.chain];
+  const key = process.env["ZEROX_API_KEY"];
+  if (!chainId || !key) return null;
+
+  const url = `${BASE}/swap/allowance-holder/quote`
+    + `?chainId=${chainId}&sellToken=${a.sellToken}&buyToken=${a.buyToken}`
+    + `&sellAmount=${a.sellAmountRaw}&taker=${a.taker}`
+    + `&slippageBps=${Math.max(1, Math.min(9999, Math.round(a.slippageBps)))}`;
+
+  let b: ZeroExResponse;
+  try {
+    const res = await fetch(url, {
+      headers: { "0x-api-key": key, "0x-version": "v2" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    b = await res.json() as ZeroExResponse;
+  } catch { return null; }
+
+  if (b.liquidityAvailable === false) return null;
+  const t = b.transaction;
+  if (!t?.to || !t.data || !b.buyAmount || !b.minBuyAmount) return null;
+
+  return {
+    to: t.to, data: t.data,
+    value: BigInt(t.value ?? "0"),
+    gas: BigInt(t.gas ?? "0"),
+    buyAmount: BigInt(b.buyAmount),
+    minBuyAmount: BigInt(b.minBuyAmount),
+  };
 }

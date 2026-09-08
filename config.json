@@ -216,8 +216,8 @@
       }
     ],
     "maxSlippagePctByMarketCapNote": "Per-band override on maxSlippagePctVsSignalPrice, matched on OUR fill's market cap (the same reference the tier uses). 55% below $600k, the scalar above it. Basis: 11 gate rejections on record scored against their own tier rules \u2014 10 would have reached take-profit, 0 would have stopped out, and the largest overshoots (50.0%, 44.8%) sat in the $300k-$600k band. The gate's premise \u2014 a wide gap means the move already happened \u2014 holds for large caps and fails for small ones, where the tracked wallet's buy is what starts the move.",
-    "walletAddress": "${WALLET_ADDRESS}",
-    "walletAddressNote": "The wallet bound to the GMGN API key; swaps must originate from it. Read from WALLET_ADDRESS in .env so no real address is committed \u2014 config.ts expands ${VAR} at load and throws if it is unset.",
+    "walletAddress": "${BOT_WALLET_ADDRESS}",
+    "walletAddressNote": "The SELF-CUSTODIED v2.0 wallet, derived from BOT_PRIVATE_KEY. Was ${WALLET_ADDRESS}, the gmgn custodial wallet, which v2.0 cannot sign for. 0x builds calldata around the taker address, so a quote built for one wallet and sent from another can revert after the gas is spent.",
     "retryOnNoFill": {
       "enabled": true,
       "maxAttempts": 2,
