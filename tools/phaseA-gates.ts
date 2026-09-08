@@ -45,8 +45,7 @@ for (const [label, token, note] of CASES) {
   const plan = await planEntry(signal);
   console.log(`\n${label}  (${note})`);
   console.log(`  act=${plan.act}  size=$${plan.sizing?.positionUsd.toFixed(2) ?? "-"}` +
-    `  liquidity=$${plan.poolLiquidityUsd?.toFixed(0) ?? "-"}` +
-    `  retention=${plan.roundTripRetentionPct?.toFixed(2) ?? "-"}%`);
+    `  liquidity=$${plan.poolLiquidityUsd?.toFixed(0) ?? "-"}`);
   for (const r of plan.rejections) console.log(`  REJECT: ${r}`);
 }
 // The gates that live in index.ts rather than planEntry — verified directly.

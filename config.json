@@ -240,9 +240,7 @@
       }
     ],
     "maxSlippagePctBySignalMarketCapNote": "Keyed on THEIR fill mcap, not ours. The maxSlippagePctByMarketCap table asks how expensive the thing we are buying already is; this asks how early the tracked wallet got in. Low down, their buy is frequently what STARTS the move, so a wide gap between their fill and our quote is the normal shape of a live runner rather than the stale price the band exists to refuse. First matching band wins, so order ascending. Combined with MAX against the mcap band, so it can only ever LOOSEN and never tightens anything. Falls through to the mcap band when their fill mcap is unknown or above every band. Added 2026-09-04 after CHROME (0x9d7d...1e18) was refused at +152.72% with their fill at $40.7k; note 120 would still refuse CHROME itself. ENTRY ONLY - the sell path keeps maxSlippagePctFor keyed on the positions own entry mcap.",
-    "marketCapCeilingNote": "Kept EQUAL to the top take-profit tier. If the ceiling sits above the last tier, tokens in the gap pass the gate with takeProfitPct null and have no exit target.",
-    "minRoundTripRetentionPct": 80,
-    "minRoundTripRetentionNote": "Reject a token if buying at our intended size and selling it straight back (quotes only, via 0x) returns less than this percent of the WETH spent. Measured over all 112 robinhood tokens ever traded on 2026-09-08: median 96.11%, 105 of 111 at or above 90%, worst legitimate token 85.68%. The only tokens below 80% were 0.05%, 0.37% (first rug) and 2.97% (the honeypot), so 80 sits in an empty gap. Replaces trusting a provider honeypot flag: 0x reported sellTaxBps 0 on the 99%-sell-tax honeypot, and gmgn's is_honeypot fired on 9 of 55 tokens including the two best trades ever (+$41.88, +$54.16)."
+    "marketCapCeilingNote": "Kept EQUAL to the top take-profit tier. If the ceiling sits above the last tier, tokens in the gap pass the gate with takeProfitPct null and have no exit target."
   },
   "exit": {
     "takeProfitTiers": [
