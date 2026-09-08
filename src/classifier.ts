@@ -32,6 +32,16 @@ export async function classifyEvm(
 
   const quotes = config.quoteAssets[chain] ?? {};
   const me = wallet.address.toLowerCase();
+  /**
+   * Whether FOMO executed this. Needed BEFORE the payment legs are read, because it decides
+   * whose money counts as the tracked wallet's payment.
+   *
+   * Under FOMO the wallet NEVER appears in the quote leg — verified 2026-09-08 on a real buy:
+   * USDG went 0xf70da978 (FOMO's relayer) -> 0xb92fe925 -> 0x8f10b468 -> the pool, and the
+   * wallet showed up only at the end receiving tokens. So payment cannot be attributed by
+   * asking who sent it; the router is what says the trade was made on the wallet's behalf.
+   */
+  const viaKnownRouter = config.knownRouters.includes((tx?.to ?? "").toLowerCase());
   const tokenDelta = new Map<string, bigint>();
   const quoteMax = new Map<string, bigint>();
 
@@ -43,9 +53,26 @@ export async function classifyEvm(
     const amount = big(log.data);
 
     if (quotes[asset]) {
-      // Largest single leg, never the sum: routes are multi-hop and the same money
-      // reappears at each leg. Summing turned a $2k buy into an apparent $11k one.
-      if (amount > (quoteMax.get(asset) ?? 0n)) quoteMax.set(asset, amount);
+      /**
+       * Whose payment is this?
+       *
+       * Counting every quote-asset transfer in the receipt, regardless of who moved it, turns
+       * a STRANGER'S purchase into an apparent buy by the tracked wallet. On 2026-09-08 four
+       * signals arrived that way: someone bought 8Stock with their own ETH and airdropped it
+       * to four influencer wallets seventeen minutes apart, seven minutes after the token was
+       * created. The classifier saw WETH move and tokens arrive and called it a BUY. The token
+       * held 74.7% in ten wallets and gmgn flagged it a honeypot.
+       *
+       * Two ways a leg can be the wallet's own payment, and it needs only one:
+       *   - a known router executed it, which is how FOMO settles (the wallet is never a party)
+       *   - the wallet is itself a party to the transfer, for trades made directly
+       *
+       * Largest single leg, never the sum: routes are multi-hop and the same money reappears
+       * at each hop. Summing turned a $2k buy into an apparent $11k one.
+       */
+      if (viaKnownRouter || from === me || to === me) {
+        if (amount > (quoteMax.get(asset) ?? 0n)) quoteMax.set(asset, amount);
+      }
       continue;
     }
     if (to === me) tokenDelta.set(asset, (tokenDelta.get(asset) ?? 0n) + amount);
@@ -93,7 +120,7 @@ export async function classifyEvm(
     timestamp: 0,
     verdict, token, tokenAmount: amount, tokenDecimals: decimals,
     sizeUsd, quoteLegs: legs, impliedMarketCapUsd,
-    viaKnownRouter: config.knownRouters.includes((tx?.to ?? "").toLowerCase()),
+    viaKnownRouter,
     routerUsed: (tx?.to ?? "").toLowerCase() || undefined,
   };
 }
