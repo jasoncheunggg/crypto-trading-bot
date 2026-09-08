@@ -94,7 +94,21 @@ export function sizePosition(chain: Chain, poolLiquidityUsd: number | null): Siz
   const funds = fundsFor(chain);
   if (!funds) return { positionUsd: 0, byPortfolio: 0, byLiquidity: null, binding: "none", blocked: `no funding configured for ${chain}` };
 
-  const byPortfolio = funds.tradableUsd * (config.risk.positionSizePctOfPortfolio / 100);
+  /**
+   * A FIXED position size, overriding the portfolio percentage.
+   *
+   * For proving a new execution stack with a known, small stake. The percentage cannot express
+   * that on a small balance: at $10.93 tradable, 15% is $1.64, which falls under
+   * minPositionSizeUsd and rejects every signal — so a test run would prove only that the
+   * sizing gate works.
+   *
+   * Still bounded by tradableUsd and by the liquidity cap below, so it can shrink but never
+   * exceed what the wallet actually has. Leave null for normal operation.
+   */
+  const fixed = (config.risk as { fixedPositionUsd?: number | null }).fixedPositionUsd ?? null;
+  const byPortfolio = fixed !== null
+    ? Math.min(fixed, funds.tradableUsd)
+    : funds.tradableUsd * (config.risk.positionSizePctOfPortfolio / 100);
   const caps = config.entry.maxPositionPctOfLiquidity as Record<string, number>;
   const capPct = caps[chain] ?? caps["default"] ?? 2;
   const byLiquidity = poolLiquidityUsd === null ? null : poolLiquidityUsd * (capPct / 100);

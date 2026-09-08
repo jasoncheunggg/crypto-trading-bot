@@ -36,7 +36,7 @@
       "valuationSourceNote": "Read balances from Alchemy. GMGN's history_total_buys reports 0 even for $83k positions it misclassifies, which would value a funded portfolio at $0 and halt every chain.",
       "sizingNote": "Paper sizing is recomputed from the ledger on EVERY signal, not on a schedule. The old refreshIntervalHours/refreshOnStartup keys were never wired to anything and have been removed so they cannot imply behaviour that does not exist."
     },
-    "maxConcurrentPositions": 2,
+    "maxConcurrentPositions": 1,
     "positionSizePctOfPortfolio": 15,
     "minPositionSizeUsd": 5,
     "onSignalAtPositionCap": "skip",
@@ -71,7 +71,10 @@
     "maxConcurrentNote": "Lowered 3 -> 2 on 2026-09-03. Replaying all 147 recorded entries under each cap: cap 3 = 147 trades / $620.14, cap 2 = 142 trades / $628.68, cap 1 = 113 trades / $539.53. The 5 entries a cap of 2 blocks were collectively -$8.54, so it costs nothing measurable while cutting peak GMGN polling from 5 tokens to 4 (2.5 -> 2.0 req/s against a 5/s IP limit). Cap 1 is genuinely worse, forfeiting $80.60.",
     "maxGasGwei": 1.2,
     "maxGasGweiNote": "Refuse new ENTRIES above this gas price. Exits are never blocked - refusing to sell is the unbounded failure. Derived 2026-09-04 from 48 live trades: mean gross edge is $2.68/trade before gas, and at the measured median of 356,561 gas units a round trip costs $0.70 at 0.4 gwei, $1.75 at 1.0, $2.63 at 1.5 (breakeven) and $3.50 at 2.0 (a guaranteed $0.83 loss). 1.2 sits below breakeven and just above the p90 of 0.968 gwei across 113 real swaps, so it blocks almost nothing historically traded while cutting off everything that loses. SCALES WITH POSITION SIZE: at $50 positions breakeven moves to ~3.0 gwei, so raise this if sizing up. Coarse by design - it uses gwei alone, while the p90 route burns 1,033,769 units and loses money well below this line; the precise version would gate on the quotes own gas_limit.",
-    "gasTopUpNote": "Removed with gastank.ts. v1.0 held USDG and paid gas in ETH, so refilling gas was a routed swap that needed cooldowns, a daily cap and a refusal-while-open. v2.0 trades native ETH: gas and capital are one pot and the refill does not exist."
+    "gasTopUpNote": "Removed with gastank.ts. v1.0 held USDG and paid gas in ETH, so refilling gas was a routed swap that needed cooldowns, a daily cap and a refusal-while-open. v2.0 trades native ETH: gas and capital are one pot and the refill does not exist.",
+    "fixedPositionUsd": 5,
+    "fixedPositionUsdNote": "TEST ONLY \u2014 overrides positionSizePctOfPortfolio. At $10.93 tradable the 15% rule gives $1.64, under minPositionSizeUsd, so every signal would be rejected and the run would prove nothing. Set back to null once the wallet is funded.",
+    "maxConcurrentPositionsTestNote": "TEST ONLY \u2014 was 2. stopAfterTrades counts CLOSED trades, so with a cap of 2 the bot could open a second position before the first closed and the run would spend twice. Restore to 2 with fixedPositionUsd when the wallet is funded."
   },
   "detection": {
     "provider": "alchemy",
@@ -339,7 +342,9 @@
   "mode": {
     "dryRun": false,
     "logOnly": false,
-    "logLevel": "info"
+    "logLevel": "info",
+    "stopAfterTrades": 1,
+    "stopAfterTradesNote": "Stop cleanly after N CLOSED live trades, so a run covers a whole round trip rather than stopping with capital still in a token. Shadows do not count. Never exits with a position still open. null for normal operation."
   },
   "_secrets": "API keys live in .env (gitignored). ${VAR} placeholders here are resolved from the environment at startup."
 }

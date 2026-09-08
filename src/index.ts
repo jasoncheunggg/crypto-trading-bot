@@ -36,7 +36,34 @@ function liveTrading(): boolean {
     && config.mode.logOnly === false
     && process.env["BOT_ALLOW_AUTOMATED_TRADES"] === "1";
 }
+/**
+ * Stop cleanly after N completed live trades.
+ *
+ * For proving a new execution stack with real money without committing to an open-ended run.
+ * Counts CLOSED live positions, not entries, so the run covers a whole round trip — entry,
+ * management, ladder and exit — rather than stopping with capital still in a token.
+ *
+ * Shadows never count: they cost nothing and hold no slot, so a run that stopped on one would
+ * prove nothing about the path that spends money.
+ *
+ * null disables it, which is the normal configuration.
+ */
+const STOP_AFTER = (config.mode as { stopAfterTrades?: number | null }).stopAfterTrades ?? null;
+let liveTradesClosed = 0;
+
 const t = () => new Date().toISOString().replace("T", " ").slice(0, 19) + "Z";
+let detector: import("./detector.ts").Detector | undefined;
+
+/** The one exit path. Declared as a function so the stopAfterTrades check can reach it from
+ *  inside the exit handler, which runs long before the signal handlers are installed. */
+function shutdown(why: string): void {
+  try { detector?.stop(); recorder.stopAll(); feed?.stop(); } catch { /* stopping anyway */ }
+  cuPersist();
+  console.log(`[${t()}] alchemy spend: ${cuSummary()}`);
+  console.log(`\n[${t()}] stopped (${why})`);
+  process.exit(0);
+}
+
 const STATE = resolve(import.meta.dirname, "..", "state");
 mkdirSync(STATE, { recursive: true });
 
@@ -505,6 +532,21 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
       const wins = ts.filter((x) => x.realizedPnlUsd > 0).length;
       const net = ts.reduce((a, x) => a + x.realizedPnlUsd, 0);
       console.log(`           session: ${ts.length} trades, ${wins} up, net ${net >= 0 ? "+" : ""}${usd(net)}   spend: ${cuSummary()}`);
+
+      liveTradesClosed += 1;
+      if (STOP_AFTER !== null && liveTradesClosed >= STOP_AFTER) {
+        // Stop only with the book FLAT. Exiting while another position is open would leave it
+        // unmanaged with no stop and no cutoff watching it — the single worst state this
+        // system can be left in, and worse than simply running one trade longer.
+        const stillOpen = allPositions().filter((p) => p.status === "open" && !p.shadow).length;
+        if (stillOpen > 0) {
+          console.log(`[${t()}] stopAfterTrades reached but ${stillOpen} position(s) still open — running on until flat`);
+        } else {
+          console.log(`\n[${t()}] STOPPING — stopAfterTrades=${STOP_AFTER} reached and the book is flat.`);
+          alert(`STOPPED after ${liveTradesClosed} live trade(s) — stopAfterTrades reached`);
+          shutdown("stopAfterTrades");
+        }
+      }
     }
   }).catch((e: unknown) => {
     recorder.stop(pos.id);
@@ -647,7 +689,9 @@ console.log(`\n[${t()}] running continuously — alerts to state/alerts.log, tra
 
 await resumeOpenPositions();
 
-const detector = new Detector((s) => {
+
+
+detector = new Detector((s) => {
   // One bad signal must not end the run. The runner lost 36 minutes to an unhandled throw.
   void onSignal(s).catch((e: unknown) => {
     const msg = e instanceof Error ? `${e.message}\n${e.stack}` : String(e);
@@ -657,10 +701,5 @@ const detector = new Detector((s) => {
 }, (m) => console.log(`[${t()}] ${m}`));
 detector.start();
 for (const sig of ["SIGINT", "SIGTERM"]) {
-  process.on(sig, () => {
-    detector.stop(); recorder.stopAll(); feed?.stop();
-    cuPersist();
-    console.log(`[${t()}] alchemy spend: ${cuSummary()}`);
-    console.log(`\n[${t()}] stopped`); process.exit(0);
-  });
+  process.on(sig, () => shutdown(sig));
 }

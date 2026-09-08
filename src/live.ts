@@ -4,7 +4,6 @@ import { config } from "./config.ts";
 import { rpc } from "./rpc.ts";
 import { tokenBalance, isNative, toRawUnits } from "./reconcile.ts";
 import type { Chain } from "./types.ts";
-import { gmgn, GmgnRateLimit } from "./gmgn.ts";
 import { ZeroExRouter, zeroExSwapTx } from "./router-0x.ts";
 import { send, account, tradingBlocked, ensureAllowance } from "./signer.ts";
 
@@ -53,7 +52,7 @@ export interface SwapResult {
   gasUsd?: number;
   /** Why it failed, for the log and the alert. */
   error?: string;
-  /** Terminal state as reported by gmgn. */
+  /** Terminal state, from the chain or from our own pre-broadcast simulation. */
   status?: string;
 }
 
@@ -222,96 +221,6 @@ async function gasUsdFor(
   if (px === null) return undefined;
   const wei = BigInt(gasUsed) * BigInt(effectiveGasPrice);
   return (Number(wei) / 1e18) * px;
-}
-
-/**
- * Confirm a swap using TWO independent chain checks, then read the amounts.
- *
- *   1. eth_getTransactionReceipt — did the transaction mine, and did it succeed?
- *   2. the wallet's token balance — did we actually end up holding the result?
- *
- * Both come from Alchemy, so confirmation no longer depends on GMGN agreeing that something
- * happened. That matters twice over: GMGN shares a 10 req/s IP limit with the price feed, and
- * its holdings endpoint has been observed returning nothing for a wallet demonstrably holding
- * 17.4M tokens. The chain has no opinion.
- *
- * A receipt alone is not enough — a transaction can mine successfully and still deliver less
- * than expected. A balance alone is not enough either — it cannot distinguish our swap from
- * anything else that moved the token. Together they are decisive.
- *
- * gmgn's order report is fetched ONCE at the end, purely for the exact settled amounts.
- */
-async function confirm(
-  chain: Chain, orderId: string, hash: string | undefined,
-  outputToken: string, balanceBefore: number, timeoutMs: number,
-  inputToken: string, inputBefore: number | null,
-): Promise<SwapResult> {
-  const began = Date.now();
-  let minedOk: boolean | undefined;
-  let gasUsd: number | undefined;
-
-  // 1. the receipt — status, and what the transaction actually burned
-  while (hash && Date.now() - began < timeoutMs) {
-    const r = await rpc<{ status?: string; gasUsed?: string; effectiveGasPrice?: string }>(
-      chain, "eth_getTransactionReceipt", [hash]).catch(() => null);
-    if (r) {
-      minedOk = BigInt(r.status ?? "0x0") === 1n;
-      gasUsd = await gasUsdFor(chain, r.gasUsed, r.effectiveGasPrice);
-      break;
-    }
-    await new Promise((res) => setTimeout(res, 500));
-  }
-  if (minedOk === false) {
-    return { ok: false, hash, orderId, minedOk: false, status: "reverted", error: "transaction reverted on chain" };
-  }
-
-  // 2. the balances — BOTH sides, symmetrically, buy or sell.
-  //
-  // Output should rise, input should fall. Checking both is what makes this a real second
-  // opinion rather than a direction-specific special case: a swap that mined but delivered
-  // nothing shows a receipt but no balance movement.
-  //
-  // The native side carries gas, so its fall is larger than the trade and its rise is
-  // smaller. Direction is therefore the only reliable signal on native, never magnitude.
-  const [outAfter, inAfter] = await Promise.all([
-    tokenBalance(chain, outputToken).catch(() => null),
-    tokenBalance(chain, inputToken).catch(() => null),
-  ]);
-  const delta = outAfter === null ? 0 : outAfter - balanceBefore;
-  const outRose = outAfter !== null && delta > 0;
-  const inFell = inAfter !== null && inputBefore !== null && inAfter < inputBefore;
-  // On a sell to native, gas can exceed a tiny proceeds and the native balance still falls —
-  // so the input token leaving is the trustworthy half there.
-  const balanceConfirmed = isNative(outputToken) ? inFell : (outRose && (inFell || isNative(inputToken)));
-
-  if (minedOk === undefined && !balanceConfirmed) {
-    // Neither check could confirm it. NOT the same as "it failed" — reconcile, do not assume.
-    return { ok: false, hash, orderId, status: "unconfirmed", balanceDelta: delta,
-             error: `no receipt and no balance change within ${timeoutMs / 1000}s — RECONCILE` };
-  }
-
-  // 3. exact amounts, one call
-  let inputAmount: number | undefined, outputAmount: number | undefined;
-  try {
-    const stdout = await gmgn(["order", "get", "--chain", chain, "--order-id", orderId, "--raw"], 20_000);
-    const d = JSON.parse(stdout) as { report?: {
-      input_amount?: string; input_token_decimals?: number;
-      output_amount?: string; output_token_decimals?: number } };
-    if (d.report?.input_amount && d.report?.output_amount) {
-      inputAmount = Number(d.report.input_amount) / 10 ** (d.report.input_token_decimals ?? 18);
-      outputAmount = Number(d.report.output_amount) / 10 ** (d.report.output_token_decimals ?? 18);
-    }
-  } catch { /* the chain already confirmed it; exact amounts are a bonus, not a gate */ }
-
-  // Fall back to the observed balance change if gmgn cannot tell us.
-  if (outputAmount === undefined && balanceConfirmed) outputAmount = delta;
-
-  return {
-    ok: true, hash, orderId, status: "confirmed",
-    minedOk: minedOk ?? undefined, balanceConfirmed, balanceDelta: delta,
-    inputAmount, outputAmount, gasUsd,
-    fillPrice: inputAmount && outputAmount && outputAmount > 0 ? inputAmount / outputAmount : undefined,
-  };
 }
 
 /**
@@ -493,25 +402,22 @@ export async function attemptEntry(
   // and would blur the only signal the caller uses to decide a rebuy is safe.
   if (r.error?.startsWith("refused:")) return { kind: "error", reason: r.error };
 
-  // A rate limit means the order never reached the exchange — which LOOKS like a clean
-  // no-fill, and was classified as one. That was the bug: the caller retried immediately,
-  // gmgn adds 5s to the penalty for every repeat, and a 30-second throttle became a 5-minute
-  // ban that stranded a position through its cutoff. Nothing landed, but retrying now is the
-  // one thing guaranteed to make it worse.
-  if (r.status === "rate_limited") return { kind: "error", reason: r.error ?? "rate limited" };
+  // A SIMULATION REVERT is deterministic against current state. signer.send runs the exact
+  // call through eth_call before broadcasting, so this costs no gas — but it also means the
+  // pool is identical a second later and a retry cannot succeed. It replaces gmgn's
+  // pre-submission refusals (GEvmInsufficientSlippage / GEvmValueLossTooHigh), which are gone
+  // with gmgn, and it is strictly better: the chain itself decides rather than a vendor's
+  // policy, and the failure text names the actual revert reason.
+  //
+  // Classified `error`, not `no-fill`, because `no-fill` authorises a retry.
+  if (r.status === "sim_reverted") {
+    return { kind: "error", reason: r.error ?? "simulation reverted — deterministic, not retrying" };
+  }
 
-  // gmgn's own PRE-SUBMISSION refusals. These are deterministic: the pool is identical a
-  // second later, so the retry cannot succeed — it buys nothing and spends rate-limit budget
-  // an OPEN POSITION may need to exit with. Observed twice on 2026-09-05: at 03:00 harmlessly,
-  // and at 15:13 while a position was 293s into its 420s cutoff, where the retry earned a
-  // 31-second 429. The identical shape once cost $3.87 by blocking a take-profit for 31s.
-  //
-  //   GEvmInsufficientSlippage  (40003702) — cannot fill within the tolerance/min-output
-  //   GEvmValueLossTooHigh      (40003712) — price impact beyond what gmgn will submit
-  //
-  // Classified `error`, not `no-fill`, for the reason above: `no-fill` authorises a retry.
-  if (/GEvmInsufficientSlippage|GEvmValueLossTooHigh|40003702|40003712/i.test(r.error ?? "")) {
-    return { kind: "error", reason: r.error ?? "gmgn refused the swap pre-submission" };
+  // A floor we could not meet is the price having moved past the decision the gates approved.
+  // Also deterministic at this instant, and also not a retry.
+  if (/could not obtain a route with minOutput|the price moved past our decision/i.test(r.error ?? "")) {
+    return { kind: "error", reason: r.error ?? "min-output floor unreachable" };
   }
 
   // A revert is definitive but is NOT retried here: the swap was attempted and rejected by
