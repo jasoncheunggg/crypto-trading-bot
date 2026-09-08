@@ -32,7 +32,9 @@ const sellRaw = BigInt(Math.floor(amt * 1e18)).toString();
 console.log(`\n--- BUY: ${amt} WETH -> token ---`);
 const buy = await executeSwap(CHAIN, WETH, token, sellRaw, 5, 90_000);
 console.log(buy.ok
-  ? `  ok ${buy.hash}\n  in ${buy.inputAmount}  out ${buy.outputAmount}  gas $${buy.gasUsd?.toFixed(4)}`
+  ? `  ok ${buy.hash}\n  inputAmount ${buy.inputAmount} ETH   inputUsd $${buy.inputUsd?.toFixed(4) ?? "UNDEFINED"}`
+    + `\n  outputAmount ${buy.outputAmount} tokens   fillPrice $${buy.fillPrice?.toPrecision(6) ?? "?"} / token`
+    + `\n  gas $${buy.gasUsd?.toFixed(4)}`
   : `  FAILED: ${buy.error}`);
 if (!buy.ok) process.exit(1);
 
@@ -40,7 +42,9 @@ const held = await bal(token);
 console.log(`\n--- SELL: ${Number(held) / 10 ** dec} token -> WETH ---`);
 const sell = await executeSwap(CHAIN, token, WETH, held.toString(), 5, 90_000);
 console.log(sell.ok
-  ? `  ok ${sell.hash}\n  in ${sell.inputAmount}  out ${sell.outputAmount}  gas $${sell.gasUsd?.toFixed(4)}`
+  ? `  ok ${sell.hash}\n  inputAmount ${sell.inputAmount} tokens`
+    + `\n  outputAmount ${sell.outputAmount} ETH   outputUsd $${sell.outputUsd?.toFixed(4) ?? "UNDEFINED"}`
+    + `\n  gas $${sell.gasUsd?.toFixed(4)}`
   : `  FAILED: ${sell.error}`);
 
 const after = await nat();

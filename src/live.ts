@@ -338,8 +338,25 @@ export async function executeSwap(
   const balanceAfter = (await tokenBalance(chain, outputToken).catch(() => null)) ?? balanceBefore;
   const delta = balanceAfter - balanceBefore;
   const inputAfter = await tokenBalance(chain, inputToken).catch(() => null);
-  const inputAmount = inputBefore !== null && inputAfter !== null ? inputBefore - inputAfter : undefined;
-  const outputAmount = delta > 0 ? delta : undefined;
+  /**
+   * Gas, in native units — and it must come OUT of the measured legs.
+   *
+   * The balance delta is the only honest measure of a fill, but when the traded asset IS the
+   * gas asset it captures both. Measured 2026-09-08: sending 0.0004 ETH moved the balance
+   * 0.00044432, the extra 0.00004432 being exactly the gas. Left in, costUsd is inflated by
+   * one gas and proceeds understated by another, and breakeven() then adds gas a THIRD time —
+   * so a $5 position carries roughly 2.4% of phantom cost, the same order as the whole
+   * slippage tolerance. It also made a 97.6% round trip read as an 12% loss.
+   *
+   * Under v1.0 this could not happen: USDG was the traded asset and ETH paid the gas.
+   */
+  const gasNative = Number((sent.gasUsed ?? 0n) * (sent.effectiveGasPrice ?? 0n)) / 1e18;
+  const rawInput = inputBefore !== null && inputAfter !== null ? inputBefore - inputAfter : undefined;
+  const inputAmount = rawInput === undefined ? undefined
+    : isNative(inputToken) ? rawInput - gasNative : rawInput;
+  const outputAmount = delta > 0
+    ? (isNative(outputToken) ? delta + gasNative : delta)
+    : (isNative(outputToken) && delta + gasNative > 0 ? delta + gasNative : undefined);
 
   /**
    * Priceable at the native rate: the chain's own coin, and its wrapper.
