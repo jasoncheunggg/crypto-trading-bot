@@ -9,7 +9,7 @@ import { open as openPosition, close as closePosition, all as allPositions, push
 import { reconcilePosition, tokenBalanceRaw, toRawUnits, tokenBalance, NATIVE_ADDRESS as NATIVE_TOKEN } from "./reconcile.ts";
 import { checkBreaker, capPositionUsd } from "./breaker.ts";
 import { gasUsdPerSwap, reserveUsdPerSwap, currentGwei } from "./gas.ts";
-import { tokenRisk, concentrationBlocks, bytecodeBlocks } from "./security.ts";
+import { tokenRisk, concentrationBlocks, bytecodeBlocks, sellTaxBlocks } from "./security.ts";
 import { recordGas, topUpNeeded, markToppedUp, describeTank } from "./gastank.ts";
 import { refreshBalances, describeBalances, dailyAnchor, gasState, gasNativeHeld, REFRESH_MS } from "./balance.ts";
 import type { Position } from "./positions.ts";
@@ -236,6 +236,15 @@ async function onSignal(s: Signal): Promise<void> {
   if (bigCode) {
     console.log(`   ACTION  abort — ${bigCode}`);
     alert(`BYTECODE REJECT ${s.token} — ${bigCode}`);
+    return;
+  }
+
+  // Ahead of concentration because it is the cheaper certainty: a 99% sell tax is not a risk
+  // profile to weigh, it is a token that cannot be exited.
+  const taxed = sellTaxBlocks(risk);
+  if (taxed) {
+    console.log(`   ACTION  abort — ${taxed}`);
+    alert(`SELL TAX REJECT ${s.token} — ${taxed}`);
     return;
   }
 

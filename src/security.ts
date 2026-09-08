@@ -37,6 +37,8 @@ import type { Chain } from "./types.ts";
 export interface TokenRisk {
   top10Pct: number | null;
   openSource: boolean | null;
+  /** Sell tax as a PERCENT, 0-100. Null when gmgn did not answer. */
+  sellTaxPct: number | null;
 }
 
 const cache = new Map<string, { r: TokenRisk; at: number }>();
@@ -48,19 +50,49 @@ export async function tokenRisk(chain: Chain, token: string): Promise<TokenRisk>
   if (hit && Date.now() - hit.at < TTL_MS) return hit.r;
   try {
     const out = await gmgn(["token", "security", "--chain", chain, "--address", token, "--raw"], 15_000);
-    const d = JSON.parse(out) as { top_10_holder_rate?: string; is_open_source?: boolean };
+    const d = JSON.parse(out) as {
+      top_10_holder_rate?: string; is_open_source?: boolean; sell_tax?: string;
+    };
     const top = Number(d.top_10_holder_rate);
+    const tax = Number(d.sell_tax);
     const r: TokenRisk = {
       top10Pct: Number.isFinite(top) ? top * 100 : null,
       openSource: typeof d.is_open_source === "boolean" ? d.is_open_source : null,
+      sellTaxPct: Number.isFinite(tax) ? tax * 100 : null,
     };
     cache.set(key, { r, at: Date.now() });
     return r;
   } catch {
     // FAILS OPEN. A missing risk score must never block a good signal — the alternative is
     // that one gmgn hiccup halts trading entirely.
-    return { top10Pct: null, openSource: null };
+    return { top10Pct: null, openSource: null, sellTaxPct: null };
   }
+}
+
+/**
+ * Refuse a token that cannot be sold without surrendering most of it.
+ *
+ * This exists because `roundTripProbe` CANNOT see a transfer tax. Proven 2026-09-08 against
+ * 0x5b234bcf67, which charges 99% on sell: at a $30 position the probe returned 2.97%
+ * retention and looked like a catch, but that was price impact from a $3.68 pool — shrink the
+ * position to $0.04 and the same token probes at 95.30% and PASSES. 0x reports sellTaxBps 0
+ * for it, so the quote the probe is built on never models the tax at all.
+ *
+ * Measured over 55 tokens with realised P&L: `sell_tax` above 50% fires on exactly ONE token,
+ * that honeypot, which returned $0.00. Zero false positives and zero opportunity cost — unlike
+ * gmgn's own `is_honeypot`, which fires on 9 of those 55 including the two best trades ever
+ * made and would have cost $76.58.
+ *
+ * FAILS OPEN, like everything else here: a null tax is unknown, not safe, but blocking every
+ * signal because gmgn hiccuped is the worse failure.
+ */
+const MAX_SELL_TAX_PCT = 50;
+
+export function sellTaxBlocks(risk: TokenRisk): string | null {
+  if (risk.sellTaxPct === null) return null;
+  if (risk.sellTaxPct <= MAX_SELL_TAX_PCT) return null;
+  return `sell tax ${risk.sellTaxPct.toFixed(0)}% (limit ${MAX_SELL_TAX_PCT}%) — `
+    + `the round-trip probe cannot see a transfer tax, only pool depth`;
 }
 
 /** The refusal rule. Null concentration means unknown, which never rejects. */
