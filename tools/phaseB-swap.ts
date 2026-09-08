@@ -13,7 +13,9 @@ const { account, publicClient } = await import("../src/signer.ts");
 const { tokenDecimals } = await import("../src/rpc.ts");
 
 const CHAIN = "robinhood" as const;
-const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
+const { inputAsset } = await import("../src/execution.ts");
+const IN = inputAsset("robinhood")!;
+const WETH = IN.address;
 const amt = Number(amtStr);
 const acct = account();
 const pub = publicClient(CHAIN);
@@ -23,7 +25,8 @@ const bal = async (t: string) =>
   BigInt((await pub.call({ to: t as `0x${string}`, data: ("0x70a08231" + pad(acct.address)) as `0x${string}` })).data ?? "0x0");
 
 console.log(`wallet ${acct.address}`);
-console.log(`WETH before  ${Number(await bal(WETH)) / 1e18}`);
+const nat = async () => Number(await pub.getBalance({ address: acct.address })) / 1e18;
+console.log(`${IN.symbol} before  ${await nat()}`);
 
 const sellRaw = BigInt(Math.floor(amt * 1e18)).toString();
 console.log(`\n--- BUY: ${amt} WETH -> token ---`);
@@ -40,7 +43,7 @@ console.log(sell.ok
   ? `  ok ${sell.hash}\n  in ${sell.inputAmount}  out ${sell.outputAmount}  gas $${sell.gasUsd?.toFixed(4)}`
   : `  FAILED: ${sell.error}`);
 
-const after = Number(await bal(WETH)) / 1e18;
-console.log(`\nWETH after   ${after}`);
-console.log(`round trip   ${((after / (Number(await bal(WETH)) / 1e18 + amt)) * 100).toFixed(2)}% (see raw numbers above)`);
+const after = await nat();
+console.log(`\n${IN.symbol} after   ${after}`);
+
 process.exit(0);

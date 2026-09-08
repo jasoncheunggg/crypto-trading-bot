@@ -18,10 +18,10 @@
       "modeNote": "Capital cannot move between chains mid-trade. Each chain funds its own signals, so position size derives from THAT chain's tradable balance, never the combined total.",
       "perChain": {
         "robinhood": {
-          "gasReserveUsd": 0.5,
-          "gasReserveNote": "Native ETH kept back for gas. ~$0.06/tx measured x 1 entry + ~6 exit sells.",
-          "paperOverrideUsd": 200,
-          "lastKnownUsd": 16.75
+          "gasReserveUsd": 3.0,
+          "gasReserveNote": "Native ETH held back from trading. Raised 0.5 -> 3.0 for v2.0: gas and trading capital are now the SAME asset, so this is the only thing keeping a position from spending the money needed to exit it. At ~$0.13/swap measured on 2026-09-08 this is ~23 swaps of headroom \u2014 one entry plus a full ladder on two concurrent positions, several times over.",
+          "lastKnownUsd": 16.75,
+          "paperOverrideUsd": 200
         },
         "bsc": {
           "gasReserveUsd": 0.5,
@@ -69,17 +69,9 @@
       "maxLossNote": "Measured against a ONCE-A-DAY anchor (state/balance.json), not the live balance: a denominator that moves with every trade makes 'down 15% today' meaningless, and a slow bleed never trips because the balance falls alongside the losses. Set to 15 on 2026-09-03 to collect data under tighter protection. 20,000-day bootstrap of 135 recorded trades at 15% sizing: while the edge holds, -15% halts 5% of days vs 3% at -20%, with the SAME 33 trades/day - so tightening costs almost no data. If the edge halves it is 22% vs 17%; if it is gone, 60% vs 51%, which is the regime where halting is the point. NOTE maxConsecutiveLosses=5 fires at about -15.2% of balance (5 x the measured -21.6% average loss at 15% sizing), so at -15% the two conditions now trip at almost the same depth. With 3 concurrent, one cluster of 3 stops at -26% is about 10% of the anchor, so this halts after roughly 1.5 clusters. Worst day on record: -10.7%. CHANGED TO 20 on 2026-09-04 at the operators request; the same bootstrap puts -20% at 3% of days halted vs 5% at -15%, and it restores headroom above maxConsecutiveLosses=5 (which trips near -15.2%) so the two conditions no longer fire at the same depth."
     },
     "maxConcurrentNote": "Lowered 3 -> 2 on 2026-09-03. Replaying all 147 recorded entries under each cap: cap 3 = 147 trades / $620.14, cap 2 = 142 trades / $628.68, cap 1 = 113 trades / $539.53. The 5 entries a cap of 2 blocks were collectively -$8.54, so it costs nothing measurable while cutting peak GMGN polling from 5 tokens to 4 (2.5 -> 2.0 req/s against a 5/s IP limit). Cap 1 is genuinely worse, forfeiting $80.60.",
-    "autoGasTopUp": {
-      "enabled": false,
-      "belowRoundTrips": 8,
-      "targetRoundTrips": 25,
-      "maxUsdPerTopUp": 40,
-      "minUsdgReserve": 50,
-      "note": "Converts USDG to native when gas runs low, so the bot cannot end up rich in USDG and unable to SELL - the worst failure this system has. Average gas is MEASURED from receipts (last 20 swaps), not taken from gasUsdPerSwap, which read $0.525 while the live session averaged $0.691 and one multi-hop swap cost $2.72. Only ever runs with the book FLAT: a conversion while a position is open races that position's exit for the same gmgn rate limit, and a 31s block on an exit cost $3.87 once. Also capped at 3 per day with a 15-minute cooldown, and refuses below $10 because a $1 test conversion lost 21% to gas. Set enabled=true to switch on.",
-      "v2Note": "Disabled under v2.0. It converts USDG->native by SWAP, and v2.0 holds no USDG. The equivalent refill is WETH.withdraw(), which is 1:1 at a fixed contract rather than a routed trade \u2014 it needs signing, so it is Phase 3 work. reserveUsdPerSwap and roundTripsLeft remain live and are unaffected."
-    },
     "maxGasGwei": 1.2,
-    "maxGasGweiNote": "Refuse new ENTRIES above this gas price. Exits are never blocked - refusing to sell is the unbounded failure. Derived 2026-09-04 from 48 live trades: mean gross edge is $2.68/trade before gas, and at the measured median of 356,561 gas units a round trip costs $0.70 at 0.4 gwei, $1.75 at 1.0, $2.63 at 1.5 (breakeven) and $3.50 at 2.0 (a guaranteed $0.83 loss). 1.2 sits below breakeven and just above the p90 of 0.968 gwei across 113 real swaps, so it blocks almost nothing historically traded while cutting off everything that loses. SCALES WITH POSITION SIZE: at $50 positions breakeven moves to ~3.0 gwei, so raise this if sizing up. Coarse by design - it uses gwei alone, while the p90 route burns 1,033,769 units and loses money well below this line; the precise version would gate on the quotes own gas_limit."
+    "maxGasGweiNote": "Refuse new ENTRIES above this gas price. Exits are never blocked - refusing to sell is the unbounded failure. Derived 2026-09-04 from 48 live trades: mean gross edge is $2.68/trade before gas, and at the measured median of 356,561 gas units a round trip costs $0.70 at 0.4 gwei, $1.75 at 1.0, $2.63 at 1.5 (breakeven) and $3.50 at 2.0 (a guaranteed $0.83 loss). 1.2 sits below breakeven and just above the p90 of 0.968 gwei across 113 real swaps, so it blocks almost nothing historically traded while cutting off everything that loses. SCALES WITH POSITION SIZE: at $50 positions breakeven moves to ~3.0 gwei, so raise this if sizing up. Coarse by design - it uses gwei alone, while the p90 route burns 1,033,769 units and loses money well below this line; the precise version would gate on the quotes own gas_limit.",
+    "gasTopUpNote": "Removed with gastank.ts. v1.0 held USDG and paid gas in ETH, so refilling gas was a routed swap that needed cooldowns, a daily cap and a refusal-while-open. v2.0 trades native ETH: gas and capital are one pot and the refill does not exist."
   },
   "detection": {
     "provider": "alchemy",
@@ -288,8 +280,8 @@
       "platformFeePctPerSwap": 1,
       "dexFeePctPerSwap": 0.3,
       "extraBufferPct": 0.5,
-      "gasUsdPerSwap": 0.525,
-      "gasUsdPerSwapNote": "Flat gas cost per swap, in USD. Measured on robinhood 2026-09-03: 453,726 gas at 0.4619 gwei = 0.000209569 ETH = $0.513 for a buy, $0.484 for a sell. Unlike the percentage fees this does NOT scale with position size, which is why it dominates small trades \u2014 7% of a $15 position for a single-slice exit, 31% for an eight-slice ladder. Revisit if the ETH price or the routing complexity changes materially. Set 0 to model a gasless venue."
+      "gasUsdPerSwap": 0.15,
+      "gasUsdPerSwapNote": "Fallback until four real receipts exist. Was 0.525, measured off gmgn's deep routing. Real v2.0 receipts 2026-09-08: $0.1286 buy (173,790 gas), $0.1055 sell (143,679). breakeven() doubles this, so the old value inflated breakeven by $0.79 on a $30 position \u2014 2.6 points \u2014 and the breakeven stop refused exits on positions that were genuinely in profit."
     },
     "trailingStopPct": null,
     "timeCutoffSeconds": 420,
@@ -330,7 +322,7 @@
   "execution": {
     "router": "0x",
     "routerNote": "0x Swap API v2 on chain 4663. Chosen over liqd after measuring both against gmgn's price for all 54 tokens with a reference price (2026-09-08): 0x accurate to within 15% on 48/54 and routed all 54; liqd 25/54 with 6 HTTP 404s. liqd's failure was routing COVERAGE, not pricing \u2014 it indexes fewer venues and silently fell back to bad pools, quoting CHROME at 332x while 0x found a Uniswap_V3 route at 0.79x. Coverage re-tested over all 112 robinhood tokens ever traded: 0x buys 112/112 and round-trips 111/112. 0x needs an API key (~5 rps) and takes 15 bps against liqd's none, but gmgn took 200 bps per side. Approval target 0x0000000000001ff3684f28c67538d4d072c22734 verified on chain: 1,009 bytes, EIP-1967 implementation and admin slots zero, owner() reverts \u2014 immutable AND ownerless.",
-    "inputAssetNote": "v2.0 trades from WETH, not USDG. The new wallet holds native ETH and could not reliably receive USDG, and liqd will not route native (only WETH), so ETH is wrapped once at 58,459 gas and held as WETH. Gas is still paid in native ETH, so a small native balance is kept. Unlike USDG<->ETH this conversion is 1:1 at a fixed contract \u2014 no routing, no slippage, no price risk.",
+    "inputAssetNote": "v2.0 trades NATIVE ETH via 0x's 0xEeee...EEeE sentinel. Measured 2026-09-08 against WETH: identical output to the wei, +18,809 gas on the buy and +3,421 on the sell, about $0.016 a round trip. Against USDG over 16 tokens: 96.21% vs 96.39% median retention, inside the per-token noise. All three cost the same to trade, so the choice is about failure modes \u2014 native makes 'rich in the trading asset but out of gas, so cannot SELL' unreachable by construction. That state stranded a position on 2026-09-04. Native also needs no approval on the way in; only the sell side approves, per token.",
     "providerNote": "gmgn is no longer in the trading path at all. Its only remaining use is the token/security DATA endpoint for top_10_holder_rate \u2014 see src/security.ts."
   },
   "rateLimit": {

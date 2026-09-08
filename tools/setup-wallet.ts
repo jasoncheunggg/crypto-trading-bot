@@ -60,9 +60,21 @@ async function main() {
   }
 
   if (cmd === "wrap" || cmd === "unwrap") {
-    const amt = Number(rest[0]);
-    if (!(amt > 0)) { console.log("give an amount, e.g. wrap 0.001 --confirm"); return; }
-    const wei = BigInt(Math.floor(amt * 1e18));
+    // "all" reads the exact raw balance. Passing a decimal instead goes through a float, and
+    // 0.00099151 rounds UP past a balance of 0.00099150950293029 — the unwrap then reverts with
+    // "burn amount exceeds balance". An 18-decimal amount needs more significant digits than a
+    // Number carries, so the only safe way to move a whole balance is never to render it.
+    let wei: bigint;
+    if (rest[0] === "all") {
+      wei = cmd === "unwrap"
+        ? await readCall(WETH, BALANCE + pad(acct.address))
+        : (await pub.getBalance({ address: acct.address })) - 2n * 10n ** 15n;  // leave gas
+      if (wei <= 0n) { console.log("nothing to move"); return; }
+    } else {
+      const amt = Number(rest[0]);
+      if (!(amt > 0)) { console.log("give an amount or 'all', e.g. wrap 0.001 --confirm"); return; }
+      wei = BigInt(Math.floor(amt * 1e18));
+    }
     const r = cmd === "wrap"
       ? await send({ chain: CHAIN, to: WETH, data: DEPOSIT, value: wei, gas: 60_000n, label: "wrap" })
       : await send({ chain: CHAIN, to: WETH, data: WITHDRAW + pad("0x" + wei.toString(16)), gas: 60_000n, label: "unwrap" });

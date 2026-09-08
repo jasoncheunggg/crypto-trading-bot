@@ -4,21 +4,32 @@ import { ZeroExRouter } from "./router-0x.ts";
 import { nativeUsd } from "./live.ts";
 
 /**
- * What we spend. v2.0 trades from WETH, not USDG.
+ * What we spend. NATIVE ETH — not USDG, and no longer WETH either.
  *
- * Forced rather than chosen: the self-custodied wallet holds native ETH and could not
- * reliably receive USDG, and holding one asset removes the USDG<->ETH conversion machinery
- * entirely. Wrapping is 1:1 at a fixed contract — 58,459 gas, no routing, no slippage, no
- * price risk — unlike the USDG swaps the gas tank used to perform.
+ * The sentinel 0xEeee...EEeE is 0x's convention for "the chain's own coin". Measured against
+ * WETH on 2026-09-08, same size, same tokens: identical output to the wei, +18,809 gas on the
+ * buy and +3,421 on the sell — about $0.016 a round trip. And against USDG over 16 tokens:
+ * 96.21% vs 96.39% median retention, which is inside the per-token noise.
  *
- * Gas is still paid in NATIVE ETH, so the wallet keeps a native balance alongside the WETH.
+ * So all three cost the same to trade, and the choice is about failure modes rather than fills.
  *
- * bsc is retained only so the table shape is unchanged; it was removed from
- * `detection.chains` on 2026-09-04 and 0x is queried on chain 4663 alone.
+ * Native wins because gas and capital become THE SAME ASSET. A wallet rich in its trading
+ * currency but out of gas cannot SELL, and that is not hypothetical — it stranded a position on
+ * 2026-09-04 and cost a managed exit. With native ETH the state is unreachable by construction
+ * rather than defended against, which is why gastank.ts is deleted rather than rewired.
+ *
+ * It also needs no approval on the way in: native rides in `tx.value`, and 0x returns
+ * issues.allowance = None. Only the SELL side still approves, per token.
+ *
+ * What it costs: idle capital is exposed to the ETH price, roughly +/-2% a day on a book that
+ * is flat most of the time. That is symmetric and zero-mean, unlike an unsellable position,
+ * which is -100% and permanent. The mitigation is to keep working capital small rather than to
+ * hold a different asset.
  */
+const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+
 const INPUT: Record<string, { address: string; decimals: number; symbol: string }> = {
-  robinhood: { address: "0x0bd7d308f8e1639fab988df18a8011f41eacad73", decimals: 18, symbol: "WETH" },
-  bsc: { address: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", decimals: 18, symbol: "USDC" },
+  robinhood: { address: NATIVE, decimals: 18, symbol: "ETH" },
 };
 
 /** One instance; it holds no state beyond the base URL. */

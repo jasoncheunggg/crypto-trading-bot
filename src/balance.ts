@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { config } from "./config.ts";
 import { inputAsset } from "./execution.ts";
 import { tokenBalance } from "./reconcile.ts";
+import { nativeUsd } from "./live.ts";
 import type { Chain } from "./types.ts";
 
 const STATE = resolve(import.meta.dirname, "..", "state");
@@ -94,18 +95,30 @@ function save(): void {
 const utcDay = (ms = Date.now()): string => String(Math.floor(ms / 86_400_000));
 
 /**
- * Read the spendable balance for a chain from the chain itself.
+ * Read the spendable balance for a chain from the chain itself, IN USD.
  *
- * This is the INPUT asset only — the stablecoin we actually buy with. Native ETH is excluded
- * deliberately: it is the gas reserve, it is not spendable on a position, and counting it
- * would size trades against money that cannot be traded.
+ * Under v1.0 the input was USDG and this returned its balance directly, because a stablecoin's
+ * units already are dollars. That assumption survived the move to WETH and was WRONG for the
+ * whole of Phase A and B: it reported 0.00099 as "$0.00099" and would have sized every position
+ * at a hundredth of a cent. It failed safe — everything landed under minPositionSizeUsd — which
+ * is exactly why it went unnoticed.
+ *
+ * The input is now native ETH, so the conversion is explicit and mandatory. A null price means
+ * we do not know what the wallet is worth, and the honest answer is null rather than a number
+ * denominated in the wrong unit.
+ *
+ * Native is no longer excluded from spendable, because it IS the trading asset now. The gas
+ * reserve is taken off downstream in fundsFor, once, rather than by holding a second currency.
  */
 export async function readLiveBalance(chain: Chain): Promise<number | null> {
   const input = inputAsset(chain);
   if (!input) return null;
   try {
     const bal = await tokenBalance(chain, input.address);
-    return bal === null ? null : bal;      // stablecoin, so units are already USD
+    if (bal === null) return null;
+    const px = await nativeUsd(chain);
+    if (px === null || px <= 0) return null;
+    return bal * px;
   } catch { return null; }
 }
 

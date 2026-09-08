@@ -348,11 +348,13 @@ export async function executeSwap(
   const balanceBefore = (await tokenBalance(chain, outputToken).catch(() => null)) ?? 0;
   const inputBefore = await tokenBalance(chain, inputToken).catch(() => null);
 
-  // The input token must be approved before 0x can move it. WETH is approved once at setup,
-  // but every token we BUY needs its own approval before it can be SOLD — see ensureAllowance.
-  // Checked here rather than only at exit so a missing approval fails loudly and early.
-  const allow = await ensureAllowance(chain, inputToken, BigInt(amountRaw));
-  if (!allow.ok) return { ok: false, error: `refused: ${allow.error ?? "could not approve input token"}` };
+  // Native ETH needs no approval — it rides in tx.value, and 0x reports issues.allowance None.
+  // Every token we BUY still needs its own approval before it can be SOLD, which is the case
+  // this guards: without it a position can be entered and never exited.
+  if (!isNative(inputToken)) {
+    const allow = await ensureAllowance(chain, inputToken, BigInt(amountRaw));
+    if (!allow.ok) return { ok: false, error: `refused: ${allow.error ?? "could not approve input token"}` };
+  }
 
   let tx = await zeroExSwapTx({
     chain, sellToken: inputToken, buyToken: outputToken,
@@ -406,7 +408,7 @@ export async function executeSwap(
   // moment where an extra transaction costs the most, and a sell blocked on a missing
   // approval is how a managed position becomes an unmanaged one. Deliberately not awaited
   // for its result beyond logging: executeSwap re-checks on the way out regardless.
-  if (delta > 0) {
+  if (delta > 0 && !isNative(outputToken)) {
     void ensureAllowance(chain, outputToken, 2n ** 255n)
       .then((a) => { if (a.approved) console.log(`   approve ${outputToken} for exit — ${a.hash}`); })
       .catch(() => undefined);

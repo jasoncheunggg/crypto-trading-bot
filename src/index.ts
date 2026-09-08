@@ -8,9 +8,8 @@ import { attemptEntry, executeSwap, nativeUsd, warmNativeUsd } from "./live.ts";
 import { open as openPosition, close as closePosition, all as allPositions, push as positionsPush, tierFor } from "./positions.ts";
 import { reconcilePosition, tokenBalanceRaw, toRawUnits, tokenBalance, NATIVE_ADDRESS as NATIVE_TOKEN } from "./reconcile.ts";
 import { checkBreaker, capPositionUsd } from "./breaker.ts";
-import { gasUsdPerSwap, reserveUsdPerSwap, currentGwei } from "./gas.ts";
+import { gasUsdPerSwap, reserveUsdPerSwap, currentGwei, recordGas, describeGas } from "./gas.ts";
 import { tokenRisk, concentrationBlocks, bytecodeBlocks, sellTaxBlocks } from "./security.ts";
-import { recordGas, topUpNeeded, markToppedUp, describeTank } from "./gastank.ts";
 import { refreshBalances, describeBalances, dailyAnchor, gasState, gasNativeHeld, REFRESH_MS } from "./balance.ts";
 import type { Position } from "./positions.ts";
 import { ExitManager, cutoffFor } from "./exit.ts";
@@ -501,7 +500,6 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
     const sign = rec.realizedPnlUsd >= 0 ? "+" : "";
     console.log(`\n[${t()}] ${pos.shadow ? "SHADOW CLOSED" : "CLOSED"} ${pos.id}  ${r.reason}  ${sign}${usd(rec.realizedPnlUsd)} (${sign}${rec.realizedPnlPct.toFixed(2)}%)  peak ${r.peakPct.toFixed(1)}%  trough ${r.troughPct.toFixed(1)}%  held ${rec.heldSec}s`);
     alert(`${pos.shadow ? "SHADOW CLOSED" : "CLOSED"} ${pos.id} ${r.reason} ${sign}${rec.realizedPnlPct.toFixed(2)}%`);
-    if (!pos.shadow) void maybeTopUpGas();
     if (!pos.shadow) {
       const ts = allTrades();
       const wins = ts.filter((x) => x.realizedPnlUsd > 0).length;
@@ -513,52 +511,6 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
     feed?.unwatch(pos.chain, pos.token);
     console.log(`   [${pos.id}] exit error: ${String(e)}`);
   });
-}
-
-/**
- * Convert USDG to native when gas runs low.
- *
- * Called after every trade closes, which is the natural moment: the average has just been
- * updated with two fresh receipts, and the book is most likely to be flat. `topUpNeeded`
- * refuses outright if any position is open — a conversion competing with a live exit for the
- * rate-limit budget is exactly the failure that cost $3.87 tonight.
- */
-async function maybeTopUpGas(): Promise<void> {
-  if (!liveTrading()) return;
-  try {
-    const chain = config.chains[0]!;
-    const input = inputAsset(chain);
-    if (!input) return;
-    const [eth, usdg] = await Promise.all([
-      tokenBalance(chain, NATIVE_TOKEN).catch(() => null),
-      tokenBalance(chain, input.address).catch(() => null),
-    ]);
-    if (eth === null || usdg === null) return;
-    const px = await nativeUsd(chain);   // cached 10 min; only called with the book flat
-    if (px === null) return;
-    const open = allPositions().filter((p) => p.status === "open" && !p.shadow).length;
-    // The BALANCE FLOOR gmgn enforces, not what a swap costs. Read fresh rather than cached:
-    // it moves with the gas price, and the whole failure this guards against was the floor
-    // rising 8x under the wallet while the measured cost barely moved.
-    const reserve = await reserveUsdPerSwap(chain, px);
-    const need = topUpNeeded(eth * px, usdg, open, reserve);
-    if (!need) return;
-
-    console.log(`\n[${t()}] GAS TOP-UP — ${need.reason}; converting ${usd(need.usd)} USDG -> native`);
-    const raw = toRawUnits(need.usd, input.decimals).toString();
-    const r = await executeSwap(chain, input.address, NATIVE_TOKEN, raw, 5);
-    markToppedUp();          // marked either way, so a failure cannot loop
-    recordGas(r.gasUsd);
-    if (r.ok) {
-      console.log(`[${t()}] GAS TOP-UP ok — received ${(r.outputAmount ?? 0).toFixed(6)} native, gas ${usd(r.gasUsd ?? 0)}`);
-      alert(`GAS TOP-UP ${usd(need.usd)} USDG -> ${(r.outputAmount ?? 0).toFixed(6)} native`);
-    } else {
-      console.log(`[${t()}] GAS TOP-UP FAILED — ${r.error}`);
-      alert(`GAS TOP-UP FAILED: ${r.error}`);
-    }
-  } catch (e) {
-    console.log(`[${t()}] gas top-up error: ${String(e).slice(0, 120)}`);
-  }
 }
 
 /**
