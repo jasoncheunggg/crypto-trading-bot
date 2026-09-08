@@ -365,30 +365,30 @@ export type EntryOutcome =
  * A PARTIAL fill is a real position. It is kept and managed normally; only the size differs
  * from what was asked for, and that is recorded rather than corrected.
  */
+/** How long a quote may be reused before it is treated as a price rather than a fact. One 0x
+ *  call is ~780ms, so this allows the natural gap between quoting and submitting without ever
+ *  broadcasting against a price older than a couple of blocks — which on a 0.094s chain is
+ *  already dozens of blocks. */
+const QUOTE_MAX_AGE_MS = 4_000;
+
 /**
  * Hard floor on tokens received, as a share of the quote we DECIDED on.
  *
- * `--slippage` does not bind here. gmgn re-quotes at submission and applies the tolerance to
- * THAT number, so a price move between our decision and the submit window fills at the new
- * price however far it ran: measured fills of 79.7%, 86.3%, 89.4% and 89.7% of quote against
- * a nominal 5% tolerance. `--min-output` is an absolute amount, so it is the only mechanism
- * that binds against the price the gates actually approved.
+ * NO LONGER THE BINDING FLOOR ON THE HAPPY PATH. 0x bakes its own minBuyAmount into the
+ * calldata at quote time, and at any tolerance under 8% that number is tighter than this one:
+ * measured 2026-09-08, a 2% tolerance floors at 98% of quote against this 92%. The transaction
+ * we broadcast is the one the gates priced, so the two mechanisms now answer the same question
+ * and 0x's answer wins.
  *
- * 0.92 comes from the distribution over 46 real entries: 42 filled at 95%+ (median 100.0%,
- * and 21 came in ABOVE quote), while the four bad ones all landed below 90%. Nothing at all
- * fell between 90% and 95%, so anything in that gap separates them cleanly; 92% is its
- * midpoint. Tightening to 98% would start rejecting 8 perfectly good fills.
+ * What it still does, and why it stays: it binds the RE-QUOTE path. If the prebuilt quote has
+ * gone stale, executeSwap prices again — and that new quote's floor is measured against the new
+ * price, not the one the gates approved. This is the only thing left comparing the two, and
+ * without it a stale entry could fill far below the decision that authorised it.
  *
- * The cost is a missed signal plus the gas on a reverted buy. That is the right trade: an
- * entry 16% above quote is instantly 14% underwater, which puts the -20% stop within noise of
- * the market and manufactures stop-outs on trades that never moved against us (SLINK,
- * 2026-09-04: filled 15.9% high, stopped 11 seconds later, -3.5%).
+ * 0.92 comes from the distribution over 46 real entries under gmgn: 42 filled at 95%+ (median
+ * 100.0%, 21 above quote), while the four bad ones all landed below 90%. Nothing fell between
+ * 90% and 95%, so anything in that gap separates them; 92% is its midpoint.
  */
-/** How long a quote may be reused before it is treated as a price rather than a fact. One
- *  0x call is ~780ms, so this allows the natural gap between quoting and submitting without
- *  ever broadcasting against a price older than a couple of blocks. */
-const QUOTE_MAX_AGE_MS = 4_000;
-
 const MIN_FILL_RATIO = 0.92;
 
 export async function attemptEntry(

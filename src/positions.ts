@@ -46,7 +46,15 @@ export interface Position {
    * gas and locks in a loss on a position that may still work out.
    */
   partialFill?: boolean;
-  /** What the quote promised, when the fill came in short. */
+  /**
+   * What the quote promised. Recorded on EVERY fill, not only short ones.
+   *
+   * realised/quoted is the only way to tune swapSlippageTolerancePct from evidence rather than
+   * from a guess, and under v2.0 there is no prior data for it: the gmgn-era figures (79.7% to
+   * 89.7%) measured a different mechanism, where the tolerance applied to gmgn's re-quote at
+   * submission across a gap of seconds. The 0x transaction is frozen at quote time, so the
+   * distribution should be far tighter — but "should be" is not a measurement.
+   */
   quotedAmount?: number;
   /**
    * Highest and lowest percent-from-entry seen so far, PERSISTED.

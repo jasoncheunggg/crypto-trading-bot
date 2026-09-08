@@ -192,7 +192,7 @@
       }
     },
     "maxSlippagePctVsSignalPrice": 25,
-    "swapSlippageTolerancePct": 5,
+    "swapSlippageTolerancePct": 2,
     "autoSlippage": false,
     "antiMev": true,
     "marketCapCeilingUsd": 7000000,
@@ -235,7 +235,8 @@
       }
     ],
     "maxSlippagePctBySignalMarketCapNote": "Keyed on THEIR fill mcap, not ours. The maxSlippagePctByMarketCap table asks how expensive the thing we are buying already is; this asks how early the tracked wallet got in. Low down, their buy is frequently what STARTS the move, so a wide gap between their fill and our quote is the normal shape of a live runner rather than the stale price the band exists to refuse. First matching band wins, so order ascending. Combined with MAX against the mcap band, so it can only ever LOOSEN and never tightens anything. Falls through to the mcap band when their fill mcap is unknown or above every band. Added 2026-09-04 after CHROME (0x9d7d...1e18) was refused at +152.72% with their fill at $40.7k; note 120 would still refuse CHROME itself. ENTRY ONLY - the sell path keeps maxSlippagePctFor keyed on the positions own entry mcap.",
-    "marketCapCeilingNote": "Kept EQUAL to the top take-profit tier. If the ceiling sits above the last tier, tokens in the gap pass the gate with takeProfitPct null and have no exit target."
+    "marketCapCeilingNote": "Kept EQUAL to the top take-profit tier. If the ceiling sits above the last tier, tokens in the gap pass the gate with takeProfitPct null and have no exit target.",
+    "swapSlippageToleranceNote": "Lowered 5 -> 2 on 2026-09-08. Under gmgn this tolerance was applied to THEIR re-quote at submission, so it had to cover the whole decide->submit gap of several seconds, and measured fills still landed at 79.7-89.7% of quote. Under 0x the transaction is FROZEN at quote time and simulated against live state before broadcast, so the only exposure left is broadcast->mine: one block at 0.094s. Verified the same day that buyAmount is IDENTICAL at 0.5%, 1%, 1.5%, 2% and 5% \u2014 slippage sets only the floor, never the price \u2014 so tightening costs nothing on the expected fill and caps worst-case loss on a $30 position at $0.60 instead of $1.50, against an expected profit of ~$1.94. The residual risk is other copy-bots firing on the same signal within the same two blocks, not sandwiching. TUNE THIS FROM DATA: positions now record quotedAmount on every fill, so realised/quoted can be measured directly."
   },
   "exit": {
     "takeProfitTiers": [
