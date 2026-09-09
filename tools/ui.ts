@@ -23,7 +23,9 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { execSync } from "node:child_process";
 
-const S = resolve(import.meta.dirname, "..", "state");
+/** State directory. Overridable so the dashboard can be pointed at a COPY for testing —
+ *  never at the live one while a test writes, since the bot owns those files. */
+const S = process.env["UI_STATE_DIR"] ?? resolve(import.meta.dirname, "..", "state");
 const HOST = process.env["UI_HOST"] ?? "127.0.0.1";
 const PORT = Number(process.env["UI_PORT"] ?? 7777);
 const TOKEN = process.env["UI_TOKEN"] ?? "";
@@ -33,7 +35,7 @@ if (HOST !== "127.0.0.1" && HOST !== "localhost" && !TOKEN) {
 }
 
 const { config } = await import("../src/config.ts");
-const { openPositions } = await import("../src/positions.ts");
+
 const { checkBreaker } = await import("../src/breaker.ts");
 const { fundsFor, sizePosition } = await import("../src/portfolio.ts");
 const { dailyAnchor } = await import("../src/balance.ts");
@@ -97,6 +99,17 @@ function tierLabel(mcap: number): string {
 const fmtMc = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M`
   : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n));
 const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+
+interface LivePosition {
+  id: string; token: string; status: string; shadow?: boolean; paper: boolean;
+  openedAt: number; costUsd: number; tokenAmount: number; remainingAmount: number;
+  tokenDecimals: number; takeProfitPct: number; stopLossPct: number;
+  entryMarketCapUsd: number; sourceWalletName: string;
+}
+function livePositions(): LivePosition[] {
+  try { return JSON.parse(readFileSync(resolve(S, "positions.json"), "utf8")) as LivePosition[]; }
+  catch { return []; }
+}
 
 interface Trade {
   closedAt: number; token: string; paper: boolean; shadow?: boolean; sourceWalletName: string;
@@ -171,7 +184,18 @@ async function state(fresh = false) {
     if (pid) { running = true; uptime = execSync(`ps -o etime= -p ${pid}`, { encoding: "utf8" }).trim(); }
   } catch { /* not running */ }
 
-  const open = openPositions();
+  /**
+   * Read from DISK every request, never from positions.ts's module state.
+   *
+   * positions.ts does `let positions = load()` once at import and mutates that array in
+   * memory. The bot owns the file and that is right for the bot — but this is a SEPARATE
+   * PROCESS, so importing openPositions() gave a snapshot frozen at whenever the dashboard
+   * started. A position opened after that never appeared, and one closed after it never left.
+   *
+   * On 2026-09-09 a position ran for 412 seconds and the OPEN panel stayed empty the whole
+   * time — the one panel you would actually watch a live trade on.
+   */
+  const open = livePositions().filter((p) => p.status === "open" && !p.shadow);
   const openOut = [];
   for (const p of open) {
     const raw = BigInt(Math.floor(p.remainingAmount * 10 ** p.tokenDecimals));
