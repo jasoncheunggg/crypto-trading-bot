@@ -457,9 +457,30 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
         if (!mustExit) {
           const gasBoth = (await gasUsdPerSwap(pos.chain)) * 2;
           const floorUsd = pos.costUsd + gasBoth;
-          const input = inputAsset(pos.chain)!;
-          minOutputRaw = toRawUnits(floorUsd, input.decimals).toString();
-          console.log(`   [${pos.id}] sell floor $${floorUsd.toFixed(2)} (cost ${usd(pos.costUsd)} + ${usd(gasBoth)} gas) — cannot settle below it`);
+          /**
+           * The floor is in DOLLARS and the payout is in NATIVE ETH. It must be converted.
+           *
+           * v1.0 sold into USDG, where one unit is one dollar, so the dollar figure could be
+           * raw-encoded directly. v2.0 sells into ETH, and encoding $35.35 as 35.35e18 asks
+           * for 35 ETH — about 2,500x the real floor. Every take-profit was then refused:
+           *
+           *   0x quotes 16390551245270580 but the floor is 35348438956350044293
+           *
+           * On 2026-09-09 that held a position through a +32.7% peak, refused eleven sells
+           * while the token was worth $41 against a $35 cost, and closed it as stuck.
+           *
+           * With no price the floor cannot be expressed at all. It is dropped rather than
+           * guessed — 0x's own slippage bound still applies, and an unprotected take-profit
+           * at the market beats another stuck position.
+           */
+          const px = await nativeUsd(pos.chain);
+          if (px === null || px <= 0) {
+            console.log(`   [${pos.id}] sell floor SKIPPED — no native price to convert $${floorUsd.toFixed(2)} into ETH`);
+          } else {
+            const floorNative = floorUsd / px;
+            minOutputRaw = toRawUnits(floorNative, input.decimals).toString();
+            console.log(`   [${pos.id}] sell floor $${floorUsd.toFixed(2)} = ${floorNative.toFixed(8)} ${input.symbol} (cost ${usd(pos.costUsd)} + ${usd(gasBoth)} gas) — cannot settle below it`);
+          }
         } else {
           console.log(`   [${pos.id}] sell ${reason}: no floor, slippage ${loose}% (must exit)`);
         }
