@@ -173,7 +173,7 @@ export class ExitManager {
      * the one failure this must never get wrong: a position wrongly marked sold leaves real
      * tokens on chain with nothing watching them.
      */
-    sellFn?: (tokens: number, reason: ExitReason, atPrice: number) =>
+    sellFn?: (tokens: number, reason: ExitReason, atPrice: number, noFloor?: boolean) =>
       Promise<{ ok: true; tokens: number; proceedsUsd: number }
         | { ok: false; error: string; terminal?: boolean; gasBlocked?: boolean }>,
     /**
@@ -302,6 +302,8 @@ export class ExitManager {
      */
     let sellFailures = 0;
     let sellTerminal = false;
+    /** Set once the floor has been abandoned as unmeetable; see the SELL_ATTEMPT_LIMIT branch. */
+    let floorDropped = false;
     let gasBlocked = false;
     let gasAlarmed = false;
     let gasWaitMs = GAS_WAIT_MIN_MS;
@@ -313,7 +315,7 @@ export class ExitManager {
     const sell = async (px: number, tokens: number, reason: ExitReason): Promise<boolean> => {
       let soldTokens = tokens, usd = net(tokens * px), price = px;
       if (sellFn) {
-        const r = await sellFn(tokens, reason, px);
+        const r = await sellFn(tokens, reason, px, floorDropped);
         if (!r.ok) {
           // GAS-BLOCKED is not a failed attempt. gmgn REJECTS these before submitting
           // anything, so no transaction exists and no gas is burned — the entire reason
@@ -370,7 +372,32 @@ export class ExitManager {
         gasBlocked = false; gasAlarmed = false; gasWaitMs = GAS_WAIT_MIN_MS;
         return false;
       }
-      if (sellFailures >= SELL_ATTEMPT_LIMIT) return true;
+      if (sellFailures >= SELL_ATTEMPT_LIMIT) {
+        /**
+         * Before abandoning, try ONCE without the min-output floor.
+         *
+         * The attempt budget exists for a token that cannot be sold AT ALL — a rug, an empty
+         * pool. A take-profit that will not fill at its floor is a different thing: it can be
+         * sold, just not at the price we wanted, and the time cutoff would drop the floor and
+         * sell it anyway a few minutes later.
+         *
+         * Treating the two identically cost a winner on 2026-09-09. A position peaked at
+         * +32.7%, its floor was unmeetable (encoded in dollars against an ETH payout), twelve
+         * sells were refused, and it was marked stuck at 288s — with its own cutoff at 479s,
+         * 190 seconds it never got to use.
+         *
+         * One attempt, and only for a reason that carries a floor: stops and cutoffs never
+         * had one, so there is nothing to drop.
+         */
+        if (!floorDropped && !sellTerminal) {
+          floorDropped = true;
+          sellFailures = 0;
+          onEvent(`  ${SELL_ATTEMPT_LIMIT} sells refused at the floor — dropping it and trying once at the market before giving up`);
+          await sleep(SELL_RETRY_MS);
+          return false;
+        }
+        return true;
+      }
       await sleep(SELL_RETRY_MS);
       return false;
     };

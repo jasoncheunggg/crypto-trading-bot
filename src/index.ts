@@ -424,7 +424,7 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
   // resumed after the mode is switched, and selling it for real would dump tokens the wallet
   // has never held. The position's own provenance decides, not the process's current mode.
   const sellFn = (!pos.shadow && !pos.paper && liveTrading())
-    ? async (tokens: number, reason: string, atPrice: number) => {
+    ? async (tokens: number, reason: string, atPrice: number, noFloor?: boolean) => {
         const input = inputAsset(pos.chain);
         if (!input) return { ok: false as const, error: `no input asset for ${pos.chain}` };
         // Exact conversion, then CLAMPED to what the wallet actually holds. Floating point
@@ -454,7 +454,7 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
         const loose = maxSlippagePctFor(pos.entryMarketCapUsd);
         const mustExit = reason === "stop_loss" || reason === "breakeven_stop" || reason === "time_cutoff";
         let minOutputRaw: string | undefined;
-        if (!mustExit) {
+        if (!mustExit && !noFloor) {
           const gasBoth = (await gasUsdPerSwap(pos.chain)) * 2;
           const floorUsd = pos.costUsd + gasBoth;
           /**
@@ -482,7 +482,7 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
             console.log(`   [${pos.id}] sell floor $${floorUsd.toFixed(2)} = ${floorNative.toFixed(8)} ${input.symbol} (cost ${usd(pos.costUsd)} + ${usd(gasBoth)} gas) — cannot settle below it`);
           }
         } else {
-          console.log(`   [${pos.id}] sell ${reason}: no floor, slippage ${loose}% (must exit)`);
+          console.log(`   [${pos.id}] sell ${reason}: no floor, slippage ${loose}% (${mustExit ? "must exit" : "floor dropped after repeated refusals"})`);
         }
         const slip = loose;
         const r = await executeSwap(pos.chain, pos.token, input.address, raw, slip, 90_000, minOutputRaw);
