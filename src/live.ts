@@ -143,6 +143,21 @@ async function nativeUsdFromChain(chain: Chain): Promise<number | null> {
         const px = maxSizing / amt;
         // A mispaired batch can produce any number at all. Native is not $50 or $50,000.
         if (px < 200 || px > 20_000) continue;
+        /**
+         * Bound against the last accepted price, not just against absurdity.
+         *
+         * The absolute bound spans 100x, so a WRONG-but-plausible figure passes it — and this
+         * takes the largest WETH leg and the largest USDG leg from one receipt and divides,
+         * which on a split or multi-hop route are not the same money. On 2026-09-09 that
+         * returned $3,350 against a true $2,512, a 34% error, and cached it for ten minutes.
+         * Everything downstream took it: position sizing, cost basis, proceeds, gas in USD.
+         *
+         * ETH does not move 10% inside one cache lifetime, so a candidate that far from the
+         * last good price is a bad pairing rather than a market move. With no reference yet,
+         * the caller falls through to 0x, which prices it authoritatively.
+         */
+        const ref = nativePrice.get(chain)?.usd;
+        if (ref && Math.abs(px / ref - 1) > 0.10) continue;
         return px;
       }
     }
@@ -179,6 +194,12 @@ function refreshNative(chain: Chain): Promise<number | null> {
   const running = nativeInflight.get(chain);
   if (running) return running;
   const p = (async () => {
+    // With no reference the band above cannot apply, so the FIRST price of a process comes
+    // from 0x rather than from a single unverified receipt. One call, once, at startup.
+    if (nativePrice.get(chain) === undefined) {
+      const seed = await nativeUsdFrom0x(chain);
+      if (seed !== null) return seed;
+    }
     const onChain = await nativeUsdFromChain(chain);
     if (onChain !== null) {
       nativePrice.set(chain, { usd: onChain, at: Date.now() });

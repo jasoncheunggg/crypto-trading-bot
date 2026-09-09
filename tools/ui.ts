@@ -35,7 +35,7 @@ if (HOST !== "127.0.0.1" && HOST !== "localhost" && !TOKEN) {
 const { config } = await import("../src/config.ts");
 const { openPositions } = await import("../src/positions.ts");
 const { checkBreaker } = await import("../src/breaker.ts");
-const { fundsFor } = await import("../src/portfolio.ts");
+const { fundsFor, sizePosition } = await import("../src/portfolio.ts");
 const { dailyAnchor } = await import("../src/balance.ts");
 const { nativeUsd } = await import("../src/live.ts");
 const { currentGwei, roundTripsLeft, reserveUsdPerSwap } = await import("../src/gas.ts");
@@ -217,7 +217,17 @@ async function state() {
       maxConsecutiveLosses: (config.risk.circuitBreaker as { maxConsecutiveLosses?: number }).maxConsecutiveLosses ?? 0,
     },
     config: {
-      positionUsd: (config.risk as { fixedPositionUsd?: number }).fixedPositionUsd ?? null,
+      /**
+       * What a position would ACTUALLY be right now, not the config field.
+       *
+       * The card read `fixedPositionUsd` straight from config, which is null whenever the
+       * portfolio rule is in charge — so the dashboard showed nothing precisely when the size
+       * had become interesting. Asking sizePosition with no liquidity cap gives the portfolio
+       * figure, which is what the next entry will use unless a thin pool binds tighter.
+       */
+      positionUsd: sizePosition(CHAIN, null).positionUsd,
+      positionSource: (config.risk as { fixedPositionUsd?: number | null }).fixedPositionUsd == null
+        ? `${config.risk.positionSizePctOfPortfolio}% of portfolio` : "fixed",
       maxConcurrent: config.risk.maxConcurrentPositions,
       wallets: (await import("../src/config.ts")).wallets.length,
       router: (config.execution as { router?: string }).router ?? "?",

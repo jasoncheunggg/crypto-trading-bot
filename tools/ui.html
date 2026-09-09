@@ -86,13 +86,13 @@ function statusPanel(d){
     <div><div class="dim">bot</div><div class="big ${run?"up":"dn"}">${run?"RUNNING":"STOPPED"}</div>
       <div class="dim">${run?esc(d.process.uptime):"not running"}</div></div>
     <div><div class="dim">balance</div><div class="big">${usd(d.wallet.balanceUsd)}</div>
-      <div class="${cls(anchorDelta)}">${pct(d.anchor?anchorDelta/d.anchor*100:0)} vs anchor</div></div>
+      <div class="dim">${d.wallet.nativeEth.toFixed(5)} ETH · <span class="${cls(anchorDelta)}">${pct(d.anchor?anchorDelta/d.anchor*100:0)}</span> vs anchor</div></div>
     <div><div class="dim">tradable</div><div class="big">${usd(d.wallet.tradableUsd)}</div>
       <div class="dim">${usd(d.wallet.gasReserveUsd)} gas reserve</div></div>
     <div><div class="dim">breaker</div><div class="big ${b.tripped?"dn":"up"}">${b.tripped?"TRIPPED":"ARMED"}</div>
       <div class="dim">${b.tripped?esc(b.reasons.join("; ")):`${b.consecutiveLosses}/${b.maxConsecutiveLosses} losses · ${pct(b.windowPnlPct)} 24h`}</div></div>
     <div><div class="dim">position size</div><div class="big">${usd(d.config.positionUsd)}</div>
-      <div class="dim">max ${d.config.maxConcurrent} concurrent</div></div>
+      <div class="dim">${esc(d.config.positionSource)} · max ${d.config.maxConcurrent}</div></div>
     <div><div class="dim">gas</div><div class="big">${d.wallet.gwei.toFixed(3)}</div>
       <div class="dim">gwei · ${d.wallet.roundTrips} round trips left</div></div>
     <div><div class="dim">wallets</div><div class="big">${d.config.wallets}</div>
