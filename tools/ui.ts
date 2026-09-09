@@ -131,12 +131,36 @@ async function mark(token: string, rawAmount: bigint, ethUsd: number): Promise<n
   return usd;
 }
 
+let balCache: { usd: number; at: number } | null = null;
+async function liveBalanceUsd(px: number): Promise<number | null> {
+  if (balCache && Date.now() - balCache.at < 15_000) return balCache.usd;
+  if (!px) return null;
+  const { rpc } = await import("../src/rpc.ts");
+  const hex = await rpc<string>(CHAIN, "eth_getBalance", [account().address, "latest"]).catch(() => null);
+  if (!hex) return null;
+  const usd = (Number(BigInt(hex)) / 1e18) * px;
+  balCache = { usd, at: Date.now() };
+  return usd;
+}
+
 async function state() {
   const ts = trades();
   const ethUsd = (await nativeUsd(CHAIN).catch(() => null)) ?? 0;
+  const ethUsdEarly = ethUsd;
   const gwei = (await currentGwei(CHAIN).catch(() => null)) ?? 0;
   const funds = fundsFor(CHAIN);
-  const bal = funds?.balanceUsd ?? 0;
+  /**
+   * The balance is read from the CHAIN, not from the bot's snapshot.
+   *
+   * The bot refreshes that snapshot on a 30-minute timer and sizes from it deliberately — a
+   * balance read is an RPC round trip and the entry path already spends ~2.5s. Correct for the
+   * bot, wrong for a dashboard: after a manual sale it showed $205.41 against $238.91 actually
+   * held, because the snapshot predated the sale.
+   *
+   * One eth_getBalance, ~26 CU, cached 15s so a page left open cannot spend budget the bot
+   * needs. Falls back to the snapshot if the call fails.
+   */
+  const bal = (await liveBalanceUsd(ethUsdEarly)) ?? funds?.balanceUsd ?? 0;
   const anchor = dailyAnchor(CHAIN, bal);
   const reserve = await reserveUsdPerSwap(CHAIN, ethUsd).catch(() => null);
   const b = checkBreaker(anchor);
@@ -207,7 +231,10 @@ async function state() {
   return {
     process: { running, uptime },
     wallet: {
-      balanceUsd: bal, tradableUsd: funds?.tradableUsd ?? 0, gasReserveUsd: funds?.gasReserveUsd ?? 0,
+      balanceUsd: bal,
+      tradableUsd: Math.max(0, bal - (funds?.gasReserveUsd ?? 0)),
+      gasReserveUsd: funds?.gasReserveUsd ?? 0,
+      snapshotUsd: funds?.balanceUsd ?? 0,
       ethUsd, ethUsdSource: live.lastPriceSource, gwei, nativeEth: ethUsd ? bal / ethUsd : 0,
       roundTrips: roundTripsLeft(bal, reserve),
     },
