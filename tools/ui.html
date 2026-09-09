@@ -1,0 +1,183 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>scalper</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--line:#232a33;--fg:#c9d1d9;--dim:#7d8590;--up:#3fb950;--dn:#f85149;--warn:#d29922;--acc:#58a6ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+.wrap{max-width:1200px;margin:0 auto;padding:14px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:22px 0 8px;font-weight:600}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+.grid{display:grid;gap:10px}
+.g4{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
+.kv span:first-child{color:var(--dim)}
+.big{font-size:20px;font-weight:600}
+.up{color:var(--up)}.dn{color:var(--dn)}.warn{color:var(--warn)}.dim{color:var(--dim)}.acc{color:var(--acc)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:var(--dim);font-weight:500;padding:5px 8px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+td{padding:5px 8px;border-bottom:1px solid #1b2129;white-space:nowrap}
+tr:hover td{background:#1b2129}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;border:1px solid var(--line)}
+.scroll{max-height:420px;overflow:auto}
+.tabs{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.tab{padding:5px 12px;border:1px solid var(--line);border-radius:6px;cursor:pointer;color:var(--dim);user-select:none}
+.tab.on{color:var(--fg);border-color:var(--acc);background:#132030}
+.hide{display:none}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.foot{color:var(--dim);font-size:11px;margin-top:22px;text-align:center}
+@media(max-width:640px){.wrap{padding:8px}td,th{padding:4px 5px;font-size:11px}.big{font-size:17px}}
+</style></head><body><div class="wrap">
+
+<div class="panel" id="status"></div>
+
+<h2>Open positions</h2>
+<div class="panel" id="open"></div>
+
+<h2>Performance</h2>
+<div class="grid g4" id="stats"></div>
+
+<div class="tabs" id="tabs">
+  <div class="tab on" data-t="equity">equity curve</div>
+  <div class="tab" data-t="excursion">excursion vs target</div>
+  <div class="tab" data-t="wallets">by wallet</div>
+  <div class="tab" data-t="reasons">by exit reason</div>
+</div>
+<div class="panel" id="chart"></div>
+
+<h2>Trades</h2>
+<div class="panel scroll" id="trades"></div>
+
+<div class="foot" id="foot"></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const usd = n => (n<0?"-$":"$") + Math.abs(n).toFixed(2);
+const pct = n => (n>=0?"+":"") + n.toFixed(2) + "%";
+const cls = n => n>0?"up":n<0?"dn":"dim";
+const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+let S = null, tab = "equity";
+
+function statusPanel(d){
+  const b = d.breaker, run = d.process.running;
+  const anchorDelta = d.wallet.balanceUsd - (d.anchor || d.wallet.balanceUsd);
+  $("#status").innerHTML = `
+  <div class="grid g4">
+    <div><div class="dim">bot</div><div class="big ${run?"up":"dn"}">${run?"RUNNING":"STOPPED"}</div>
+      <div class="dim">${run?esc(d.process.uptime):"not running"}</div></div>
+    <div><div class="dim">balance</div><div class="big">${usd(d.wallet.balanceUsd)}</div>
+      <div class="${cls(anchorDelta)}">${pct(d.anchor?anchorDelta/d.anchor*100:0)} vs anchor</div></div>
+    <div><div class="dim">tradable</div><div class="big">${usd(d.wallet.tradableUsd)}</div>
+      <div class="dim">${usd(d.wallet.gasReserveUsd)} gas reserve</div></div>
+    <div><div class="dim">breaker</div><div class="big ${b.tripped?"dn":"up"}">${b.tripped?"TRIPPED":"ARMED"}</div>
+      <div class="dim">${b.tripped?esc(b.reasons.join("; ")):`${b.consecutiveLosses}/${b.maxConsecutiveLosses} losses · ${pct(b.windowPnlPct)} 24h`}</div></div>
+    <div><div class="dim">position size</div><div class="big">${usd(d.config.positionUsd)}</div>
+      <div class="dim">max ${d.config.maxConcurrent} concurrent</div></div>
+    <div><div class="dim">gas</div><div class="big">${d.wallet.gwei.toFixed(3)}</div>
+      <div class="dim">gwei · ${d.wallet.roundTrips} round trips left</div></div>
+    <div><div class="dim">wallets</div><div class="big">${d.config.wallets}</div>
+      <div class="dim">tracked · ${esc(d.config.router)} router</div></div>
+    <div><div class="dim">ETH</div><div class="big">$${d.wallet.ethUsd.toFixed(0)}</div>
+      <div class="dim">${d.wallet.nativeEth.toFixed(6)} held</div></div>
+  </div>`;
+}
+
+function openPanel(d){
+  if(!d.open.length){ $("#open").innerHTML = '<div class="dim">none</div>'; return; }
+  $("#open").innerHTML = `<table><tr><th>token</th><th>source</th><th class="num">cost</th><th class="num">now</th>
+    <th class="num">P&L</th><th class="num">target</th><th class="num">stop</th><th class="num">age</th></tr>` +
+    d.open.map(p=>`<tr><td class="acc">${esc(p.token.slice(0,12))}</td><td>${esc(p.source)}</td>
+      <td class="num">${usd(p.costUsd)}</td>
+      <td class="num">${p.markUsd==null?'<span class="dn">UNROUTABLE</span>':usd(p.markUsd)}</td>
+      <td class="num ${cls(p.pnlUsd||0)}">${p.pnlUsd==null?"—":usd(p.pnlUsd)+" "+pct(p.pnlPct)}</td>
+      <td class="num">+${p.takeProfitPct}%</td><td class="num">-${p.stopLossPct}%</td>
+      <td class="num dim">${p.ageMin}m</td></tr>`).join("") + `</table>`;
+}
+
+function statsPanel(d){
+  const s = d.stats;
+  const card = (label,val,sub,c) => `<div class="panel"><div class="dim">${label}</div>
+    <div class="big ${c||""}">${val}</div><div class="dim">${sub}</div></div>`;
+  $("#stats").innerHTML =
+    card("net P&L (live)", usd(s.netUsd), `${s.n} trades`, cls(s.netUsd)) +
+    card("win rate", s.winPct.toFixed(0)+"%", `${s.wins}W / ${s.n-s.wins}L`) +
+    card("today", usd(s.todayUsd), `${s.todayN} trades`, cls(s.todayUsd)) +
+    card("avg trade", usd(s.avgUsd), `median hold ${s.medianHold}s`, cls(s.avgUsd));
+}
+
+function svgLine(pts,w,h,color){
+  if(pts.length<2) return "";
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys,0),y1=Math.max(...ys,0);
+  const sx=v=>(x1===x0?0:(v-x0)/(x1-x0))*w, sy=v=>h-(y1===y0?h/2:(v-y0)/(y1-y0)*h);
+  const d=pts.map((p,i)=>(i?"L":"M")+sx(p[0]).toFixed(1)+" "+sy(p[1]).toFixed(1)).join(" ");
+  const zero=sy(0);
+  return `<svg viewBox="0 0 ${w} ${h+18}"><line x1="0" y1="${zero}" x2="${w}" y2="${zero}" stroke="#2a323c" stroke-dasharray="3 3"/>
+    <path d="${d}" fill="none" stroke="${color}" stroke-width="1.8"/>
+    <text x="2" y="${h+14}" fill="#7d8590" font-size="10">${y0.toFixed(2)} … ${y1.toFixed(2)}</text></svg>`;
+}
+
+function chartPanel(d){
+  const el=$("#chart");
+  if(tab==="equity"){
+    let c=0; const pts=d.trades.slice().reverse().map((t,i)=>{c+=t.pnlUsd;return [i,c];});
+    el.innerHTML = `<div class="dim" style="margin-bottom:6px">cumulative realised P&L, oldest first</div>`+
+      svgLine(pts,1100,180,"#58a6ff");
+  } else if(tab==="excursion"){
+    const rows=d.trades.filter(t=>t.peakPct!=null).slice(0,60);
+    if(!rows.length){el.innerHTML='<div class="dim">no excursion data</div>';return;}
+    const w=1100,h=Math.max(160,rows.length*13),bw=w/rows.length;
+    const all=rows.flatMap(t=>[t.peakPct,t.troughPct,t.takeProfitPct,-t.stopLossPct]);
+    const lo=Math.min(...all,0), hi=Math.max(...all,0);
+    const sy=v=>h-((v-lo)/(hi-lo))*h;
+    let bars=rows.map((t,i)=>{
+      const x=i*bw+bw*0.2, ww=Math.max(2,bw*0.6);
+      return `<rect x="${x}" y="${sy(t.peakPct)}" width="${ww}" height="${Math.max(1,sy(t.troughPct)-sy(t.peakPct))}" fill="#2f3b48"/>`
+        +`<line x1="${x}" y1="${sy(t.takeProfitPct)}" x2="${x+ww}" y2="${sy(t.takeProfitPct)}" stroke="#3fb950" stroke-width="1.5"/>`
+        +`<line x1="${x}" y1="${sy(-t.stopLossPct)}" x2="${x+ww}" y2="${sy(-t.stopLossPct)}" stroke="#f85149" stroke-width="1.5"/>`
+        +`<rect x="${x}" y="${sy(Math.max(t.pnlPct,0))}" width="${ww}" height="${Math.max(1,Math.abs(sy(t.pnlPct)-sy(0)))}" fill="${t.pnlPct>=0?"#3fb95055":"#f8514955"}"/>`;
+    }).join("");
+    const hit=rows.filter(t=>t.peakPct>=t.takeProfitPct).length;
+    el.innerHTML=`<div class="dim" style="margin-bottom:6px">grey = peak-to-trough range · <span class="up">green line = take-profit</span> · <span class="dn">red line = stop</span> · filled = realised.
+      <b>${hit}/${rows.length}</b> ever reached their target.</div>
+      <svg viewBox="0 0 ${w} ${h}"><line x1="0" y1="${sy(0)}" x2="${w}" y2="${sy(0)}" stroke="#2a323c"/>${bars}</svg>`;
+  } else if(tab==="wallets"){
+    el.innerHTML=`<table><tr><th>wallet</th><th class="num">n</th><th class="num">net</th><th class="num">win%</th><th class="num">avg</th></tr>`+
+      d.byWallet.map(w=>`<tr><td>${esc(w.name)}</td><td class="num">${w.n}</td>
+      <td class="num ${cls(w.pnl)}">${usd(w.pnl)}</td><td class="num">${w.winPct.toFixed(0)}%</td>
+      <td class="num ${cls(w.avg)}">${usd(w.avg)}</td></tr>`).join("")+`</table>`;
+  } else {
+    el.innerHTML=`<table><tr><th>exit reason</th><th class="num">n</th><th class="num">net</th><th class="num">avg%</th></tr>`+
+      d.byReason.map(r=>`<tr><td>${esc(r.reason)}</td><td class="num">${r.n}</td>
+      <td class="num ${cls(r.pnl)}">${usd(r.pnl)}</td><td class="num ${cls(r.avgPct)}">${pct(r.avgPct)}</td></tr>`).join("")+`</table>`;
+  }
+}
+
+function tradesPanel(d){
+  $("#trades").innerHTML=`<table><tr><th>closed</th><th>source</th><th>token</th><th class="num">cost</th>
+    <th class="num">P&L</th><th class="num">%</th><th class="num">peak</th><th class="num">trough</th><th>reason</th><th class="num">held</th></tr>`+
+    d.trades.slice(0,80).map(t=>`<tr><td class="dim">${esc(t.when)}</td><td>${esc(t.source)}</td>
+      <td class="acc">${esc(t.token.slice(0,12))}</td><td class="num">${usd(t.costUsd)}</td>
+      <td class="num ${cls(t.pnlUsd)}">${usd(t.pnlUsd)}</td><td class="num ${cls(t.pnlPct)}">${pct(t.pnlPct)}</td>
+      <td class="num dim">${t.peakPct==null?"—":pct(t.peakPct)}</td>
+      <td class="num dim">${t.troughPct==null?"—":pct(t.troughPct)}</td>
+      <td><span class="pill">${esc(t.reason)}</span></td><td class="num dim">${t.heldSec}s</td></tr>`).join("")+`</table>`;
+}
+
+async function load(){
+  try{
+    const r = await fetch("api/state"+location.search);
+    if(!r.ok){ $("#foot").textContent = "api error "+r.status; return; }
+    S = await r.json();
+    statusPanel(S); openPanel(S); statsPanel(S); chartPanel(S); tradesPanel(S);
+    $("#foot").textContent = "updated "+new Date().toLocaleTimeString()+" · read-only · "+S.meta.note;
+  }catch(e){ $("#foot").textContent = "unreachable — is the ui server running?"; }
+}
+$("#tabs").addEventListener("click",e=>{
+  const t=e.target.closest(".tab"); if(!t)return;
+  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===t));
+  tab=t.dataset.t; if(S) chartPanel(S);
+});
+load(); setInterval(load, 5000);
+</script></body></html>
