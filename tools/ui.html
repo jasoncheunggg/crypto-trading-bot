@@ -27,6 +27,12 @@ tr:hover td{background:#1b2129}
 .hide{display:none}
 svg{display:block;width:100%;height:auto;overflow:visible}
 .foot{color:var(--dim);font-size:11px;margin-top:22px;text-align:center}
+.ca{cursor:pointer;border-bottom:1px dotted #2f3b48}
+.ca:hover{color:#8fc6ff;border-bottom-color:#58a6ff}
+.ca.copied{color:var(--up);border-bottom-color:var(--up)}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#1f6feb;color:#fff;
+  padding:6px 14px;border-radius:6px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.on{opacity:1}
 @media(max-width:640px){.wrap{padding:8px}td,th{padding:4px 5px;font-size:11px}.big{font-size:17px}}
 </style></head><body><div class="wrap">
 
@@ -50,6 +56,7 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 <div class="panel scroll" id="trades"></div>
 
 <div class="foot" id="foot"></div>
+<div id="toast"></div>
 </div>
 <script>
 const $ = s => document.querySelector(s);
@@ -57,6 +64,9 @@ const usd = n => (n<0?"-$":"$") + Math.abs(n).toFixed(2);
 const pct = n => (n>=0?"+":"") + n.toFixed(2) + "%";
 const cls = n => n>0?"up":n<0?"dn":"dim";
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+/* Full address in the DOM, shortened only for display — hover shows it, click copies it.
+   A truncated CA you cannot recover is useless the moment you want to look a token up. */
+const ca = a => `<span class="ca" data-ca="${esc(a)}" title="${esc(a)} — click to copy">${esc(a.slice(0,6))}…${esc(a.slice(-4))}</span>`;
 let S = null, tab = "equity";
 
 function statusPanel(d){
@@ -87,7 +97,7 @@ function openPanel(d){
   if(!d.open.length){ $("#open").innerHTML = '<div class="dim">none</div>'; return; }
   $("#open").innerHTML = `<table><tr><th>token</th><th>source</th><th class="num">cost</th><th class="num">now</th>
     <th class="num">P&L</th><th class="num">target</th><th class="num">stop</th><th class="num">age</th></tr>` +
-    d.open.map(p=>`<tr><td class="acc">${esc(p.token.slice(0,12))}</td><td>${esc(p.source)}</td>
+    d.open.map(p=>`<tr><td class="acc">${ca(p.token)}</td><td>${esc(p.source)}</td>
       <td class="num">${usd(p.costUsd)}</td>
       <td class="num">${p.markUsd==null?'<span class="dn">UNROUTABLE</span>':usd(p.markUsd)}</td>
       <td class="num ${cls(p.pnlUsd||0)}">${p.pnlUsd==null?"—":usd(p.pnlUsd)+" "+pct(p.pnlPct)}</td>
@@ -162,7 +172,7 @@ function tradesPanel(d){
   $("#trades").innerHTML=`<table><tr><th>closed</th><th>source</th><th>token</th><th class="num">cost</th>
     <th class="num">gas</th><th class="num">P&L</th><th class="num">%</th><th class="num">peak</th><th class="num">trough</th><th>reason</th><th class="num">held</th></tr>`+
     d.trades.slice(0,80).map(t=>`<tr><td class="dim">${esc(t.when)}</td><td>${esc(t.source)}</td>
-      <td class="acc">${esc(t.token.slice(0,12))}</td><td class="num">${usd(t.costUsd)}</td>
+      <td class="acc">${ca(t.token)}</td><td class="num">${usd(t.costUsd)}</td>
       <td class="num warn">${t.gasUsd==null?'<span class="dim">—</span>':"-"+usd(t.gasUsd)}</td>
       <td class="num ${cls(t.pnlUsd)}">${usd(t.pnlUsd)}</td><td class="num ${cls(t.pnlPct)}">${pct(t.pnlPct)}</td>
       <td class="num dim">${t.peakPct==null?"—":pct(t.peakPct)}</td>
@@ -179,6 +189,16 @@ async function load(){
     $("#foot").textContent = "updated "+new Date().toLocaleTimeString()+" · read-only · "+S.meta.note;
   }catch(e){ $("#foot").textContent = "unreachable — is the ui server running?"; }
 }
+document.addEventListener("click", async e => {
+  const el = e.target.closest(".ca"); if(!el) return;
+  const v = el.dataset.ca;
+  try { await navigator.clipboard.writeText(v); }
+  catch { const t=document.createElement("textarea"); t.value=v; document.body.appendChild(t); t.select();
+          document.execCommand("copy"); t.remove(); }
+  el.classList.add("copied"); setTimeout(()=>el.classList.remove("copied"), 900);
+  const toast=$("#toast"); toast.textContent="copied "+v; toast.classList.add("on");
+  clearTimeout(window._tt); window._tt=setTimeout(()=>toast.classList.remove("on"), 1600);
+});
 $("#tabs").addEventListener("click",e=>{
   const t=e.target.closest(".tab"); if(!t)return;
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===t));
