@@ -49,6 +49,8 @@ svg{display:block;width:100%;height:auto;overflow:visible}
   <div class="tab" data-t="excursion">excursion vs target</div>
   <div class="tab" data-t="wallets">by wallet</div>
   <div class="tab" data-t="reasons">by exit reason</div>
+  <div class="tab" data-t="rejected">rejected</div>
+  <div class="tab" data-t="config">settings</div>
 </div>
 <div class="panel" id="chart"></div>
 
@@ -165,6 +167,29 @@ function chartPanel(d){
       d.byWallet.map(w=>`<tr><td>${esc(w.name)}</td><td class="num">${w.n}</td>
       <td class="num ${cls(w.pnl)}">${usd(w.pnl)}</td><td class="num">${w.winPct.toFixed(0)}%</td>
       <td class="num ${cls(w.avg)}">${usd(w.avg)}</td></tr>`).join("")+`</table>`;
+  } else if(tab==="rejected"){
+    const rs=d.rejections||[];
+    if(!rs.length){el.innerHTML='<div class="dim">no rejected BUY signals in the current log</div>';return;}
+    el.innerHTML=`<div class="dim" style="margin-bottom:6px">BUY signals the bot refused, newest first.
+      Airdrop/RECEIVED noise is excluded — only real candidates.</div>
+      <div class="scroll"><table><tr><th>when</th><th>token</th><th>CA</th><th>source</th>
+      <th class="num">size</th><th class="num">their mcap</th><th>why</th></tr>`+
+      rs.map(r=>`<tr><td class="dim">${esc(r.when)}</td>
+        <td>${r.symbol?esc(r.symbol):'<span class="dim">?</span>'}</td>
+        <td class="acc">${ca(r.token)}</td><td>${esc(r.wallet)}</td>
+        <td class="num">${r.sizeUsd==null?"—":usd(r.sizeUsd)}</td>
+        <td class="num dim">${r.mcap?"$"+esc(r.mcap):"—"}</td>
+        <td class="${r.kind==="abort"?"warn":"dim"}" style="white-space:normal">${r.kind==="abort"?"<b>abort</b> · ":""}${esc(r.reason)}</td>
+      </tr>`).join("")+`</table></div>`;
+  } else if(tab==="config"){
+    const t=d.tunables;
+    el.innerHTML=`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+      <div><div class="dim" style="margin-bottom:6px">take-profit by market cap</div>
+        <table>${t.tiers.map(x=>`<tr><td>${esc(x.band)}</td><td class="num up">+${x.takeProfitPct}%</td></tr>`).join("")}</table></div>
+      ${t.groups.map(g=>`<div><div class="dim" style="margin-bottom:6px">${esc(g.name)}</div>
+        <table>${g.rows.map(r=>`<tr><td>${esc(r[0])}</td><td class="num">${esc(r[1])}</td></tr>`).join("")}</table></div>`).join("")}
+    </div>
+    <div class="dim" style="margin-top:10px">read live from config.json — this cannot disagree with what the bot is using</div>`;
   } else {
     el.innerHTML=`<table><tr><th>exit reason</th><th class="num">n</th><th class="num">net</th><th class="num">avg%</th></tr>`+
       d.byReason.map(r=>`<tr><td>${esc(r.reason)}</td><td class="num">${r.n}</td>

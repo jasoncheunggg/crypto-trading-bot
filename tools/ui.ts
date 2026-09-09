@@ -19,7 +19,7 @@
  * shows balances and open positions — information someone could trade against.
  */
 import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { execSync } from "node:child_process";
 
@@ -250,7 +250,119 @@ async function state() {
       tier: t.entryMarketCapUsd ? tierLabel(t.entryMarketCapUsd) : null,
     }))),
     byWallet, byReason,
+    rejections: await Promise.all(rejections().map(async (r) => ({ ...r, symbol: (await symbolOf(r.token)) || null }))),
+    tunables: tunables(),
     meta: { note: `${open.length} open · marks cached ${MARK_TTL / 1000}s` },
+  };
+}
+
+/**
+ * Signals the bot REFUSED, parsed from its own log.
+ *
+ * Rejections exist nowhere else: trades.jsonl records what was taken, and the reasoning behind
+ * everything skipped lives only in the runner output. That reasoning is the more informative
+ * half — a gate that never fires is not protecting anything, and one that fires constantly is
+ * probably miscalibrated.
+ *
+ * Only BUY verdicts are returned. The overwhelming majority of skips are airdrop spam arriving
+ * at tracked wallets (RECEIVED, not via a router, $0.00), and listing hundreds of those would
+ * bury the handful of real near-misses.
+ *
+ * Reads the tail of the most recently written log, bounded, and never writes.
+ */
+interface Rejection {
+  when: string; wallet: string; verdict: string; token: string; sizeUsd: number | null;
+  mcap: string | null; reason: string; kind: "skip" | "abort";
+}
+function rejections(limit = 120): Rejection[] {
+  let file = "", best = 0;
+  for (const f of readdirSync(S)) {
+    if (!f.endsWith(".log") || f.startsWith("record-") || f === "alerts.log" || f === "ui.log") continue;
+    const st = statSync(resolve(S, f));
+    if (st.mtimeMs > best) { best = st.mtimeMs; file = f; }
+  }
+  if (!file) return [];
+  let text = "";
+  try {
+    const fd = readFileSync(resolve(S, file));
+    text = fd.subarray(Math.max(0, fd.length - 2_000_000)).toString("utf8");
+  } catch { return []; }
+
+  const out: Rejection[] = [];
+  const head = /^\[(\S+ \S+)\] (@\S+) \(evm\)\s+\[robinhood\]\s+(\w+)/;
+  let cur: Partial<Rejection> | null = null;
+  for (const line of text.split("\n")) {
+    const m = head.exec(line);
+    if (m) { cur = { when: m[1]!.slice(5, 16), wallet: m[2]!, verdict: m[3]! }; continue; }
+    if (!cur) continue;
+    const t = line.trim();
+    if (t.startsWith("token   0x")) cur.token = t.split(/\s+/).pop();
+    else if (t.startsWith("signal")) {
+      const q = /\$([\d,]+\.?\d*)/.exec(t);
+      cur.sizeUsd = t.includes("nothing paid") ? 0 : q ? parseFloat(q[1]!.replace(/,/g, "")) : null;
+    } else if (t.startsWith("mcap")) {
+      const q = /\$([\d,]+\.?\d*)/.exec(t); cur.mcap = q ? q[1]! : null;
+    } else if (t.startsWith("ACTION  skip") || t.startsWith("ACTION  abort")) {
+      if (cur.verdict === "BUY" && cur.token) {
+        out.push({
+          when: cur.when!, wallet: cur.wallet!, verdict: cur.verdict!, token: cur.token,
+          sizeUsd: cur.sizeUsd ?? null, mcap: cur.mcap ?? null,
+          kind: t.startsWith("ACTION  abort") ? "abort" : "skip",
+          reason: t.replace(/^ACTION\s+(skip|abort)\s+—\s*/, "").trim(),
+        });
+      }
+      cur = null;
+    }
+  }
+  return out.reverse().slice(0, limit);
+}
+
+/** The knobs, read live from config so the page can never disagree with what the bot is using. */
+function tunables() {
+  const e = config.entry as Record<string, unknown>;
+  const r = config.risk as Record<string, unknown>;
+  const x = config.exit as Record<string, unknown>;
+  const pc = (r.portfolioValue as { perChain?: Record<string, { gasReserveUsd?: number }> })?.perChain?.[CHAIN];
+  return {
+    tiers: (x.takeProfitTiers as { maxMarketCapUsd: number; takeProfitPct: number }[])
+      .map((t, i, a) => ({
+        band: `${fmtMc(i ? a[i - 1]!.maxMarketCapUsd : 0)}-${fmtMc(t.maxMarketCapUsd)}`,
+        takeProfitPct: t.takeProfitPct,
+      })),
+    groups: [
+      { name: "sizing", rows: [
+        ["fixed position", (r.fixedPositionUsd as number | null) === null ? "off" : `$${r.fixedPositionUsd}`],
+        ["% of portfolio", `${r.positionSizePctOfPortfolio}%`],
+        ["min position", `$${r.minPositionSizeUsd}`],
+        ["max concurrent", String(r.maxConcurrentPositions)],
+        ["gas reserve", `$${pc?.gasReserveUsd ?? "?"}`],
+      ] },
+      { name: "exit", rows: [
+        ["stop loss", `-${r.stopLossPct}%`],
+        ["time cutoff", `${x.timeCutoffSeconds ?? (x as { cutoffSeconds?: number }).cutoffSeconds ?? "?"}s`],
+        ["ladder", `${(x.ladder as { sellPctOfRemainder?: number })?.sellPctOfRemainder}% every ${(x.ladder as { intervalSeconds?: number })?.intervalSeconds}s`],
+        ["breakeven stop", (x.breakevenStop as { enabled?: boolean })?.enabled ? "on" : "off"],
+        ["gas per swap (est)", `$${(x.breakevenStop as { gasUsdPerSwap?: number })?.gasUsdPerSwap}`],
+      ] },
+      { name: "entry gates", rows: [
+        ["min signal size", `$${e.minTradeUsd}`],
+        ["min pool liquidity", `$${e.minPoolLiquidityUsd}`],
+        ["mcap floor / ceiling", `$${e.marketCapFloorUsd} / $${Number(e.marketCapCeilingUsd).toLocaleString()}`],
+        ["re-entry cooldown", `${((e.dedupe as { tokenReentry?: { cooldownMinutes?: number } })?.tokenReentry?.cooldownMinutes) ?? 0}m`],
+        ["max positions / token", String((e.dedupe as { tokenReentry?: { maxPositionsPerToken?: number } })?.tokenReentry?.maxPositionsPerToken ?? "?")],
+      ] },
+      { name: "slippage", rows: [
+        ["swap tolerance", `${e.swapSlippageTolerancePct}%`],
+        ["vs signal price", `${e.maxSlippagePctVsSignalPrice}%`],
+        ...((e.maxSlippagePctByMarketCap as { maxMarketCapUsd: number; pct: number }[]) ?? [])
+          .map((b) => [`  below ${fmtMc(b.maxMarketCapUsd)} mcap`, `${b.pct}%`] as [string, string]),
+        ...((e.maxSlippagePctBySignalMarketCap as { maxSignalMarketCapUsd: number; pct: number }[]) ?? [])
+          .map((b) => [`  their fill under ${fmtMc(b.maxSignalMarketCapUsd)}`, `${b.pct}%`] as [string, string]),
+      ] },
+      { name: "circuit breaker", rows: Object.entries(r.circuitBreaker as Record<string, unknown>)
+        .filter(([k, v]) => !k.endsWith("Note") && typeof v !== "object")
+        .map(([k, v]) => [k.replace(/([A-Z])/g, " $1").toLowerCase(), String(v)] as [string, string]) },
+    ],
   };
 }
 
