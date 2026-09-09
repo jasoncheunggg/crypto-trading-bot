@@ -115,15 +115,18 @@ async function state() {
   const totalGas = withGas.reduce((a, t) => a + (gasOf(t) as number), 0);
 
   /**
-   * Capital that went into a STUCK position and never came back.
+   * Realised losses the ledger never recorded.
    *
    * `stuckRecord` zeroes P&L on a stuck trade so an unsold position cannot book an imaginary
-   * loss and trip the breaker — correct for the breaker, wrong for a P&L headline. Two trades
-   * put $61.96 in and returned $0.00, and the ledger records both as costing nothing. Netting
-   * them out is the difference between "+$98 profit" and the truth.
+   * loss and trip the breaker — correct for the BREAKER, wrong for a P&L headline.
    *
-   * Only counted where proceeds really were zero AND nothing is still held: a stuck position
-   * whose tokens were later sold has its real result somewhere else in the ledger already.
+   * Both were later sold by hand, so nothing is outstanding, but the sales recovered almost
+   * nothing: GRASS bought at $30.16 sold for $0.0140, and the honeypot at $30.19 sold for
+   * $0.0004. About 1.4 cents of $61.96 came back. The positions closed; the money did not
+   * return, and those sales happened outside the bot so no trade record exists for them.
+   *
+   * Counted only where the bot's own proceeds were zero, so a stuck position the bot later
+   * sold itself is not double-counted against the record it already wrote.
    */
   const stuckLost = ts.filter((t) => t.reason === "stuck" && (t.proceedsUsd ?? 0) === 0)
     .reduce((a, t) => a + t.costUsd, 0);
@@ -175,7 +178,7 @@ async function state() {
       totalGasUsd: totalGas,
       grossUsd: ts.reduce((a, t) => a + t.realizedPnlUsd, 0) + totalGas,
       gasKnown: withGas.length,
-      stuckLostUsd: stuckLost,
+      unrecordedLossUsd: stuckLost,
       trueNetUsd: ts.reduce((a, t) => a + t.realizedPnlUsd, 0) - stuckLost,
       todayGasUsd: today.reduce((a, t) => a + (gasOf(t) ?? 0), 0),
     },
