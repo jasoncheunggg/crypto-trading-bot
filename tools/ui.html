@@ -25,6 +25,10 @@ tr:hover td{background:#1b2129}
 .tab{padding:5px 12px;border:1px solid var(--line);border-radius:6px;cursor:pointer;color:var(--dim);user-select:none}
 .tab.on{color:var(--fg);border-color:var(--acc);background:#132030}
 .hide{display:none}
+.btn{background:var(--panel);border:1px solid var(--line);color:var(--fg);font:inherit;
+  padding:5px 14px;border-radius:6px;cursor:pointer}
+.btn:hover{border-color:var(--acc);color:var(--acc)}
+.btn:disabled{opacity:.5;cursor:default;border-color:var(--line);color:var(--dim)}
 /* Settings values are read straight from config.json, so their length is not under this
    page's control. Fixed layout plus wrapping means no single value can widen the table and
    push the others out of view — which a stray prose `note` did. */
@@ -42,6 +46,9 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 @media(max-width:640px){.wrap{padding:8px}td,th{padding:4px 5px;font-size:11px}.big{font-size:17px}}
 </style></head><body><div class="wrap">
 
+<div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+  <button id="refresh" class="btn">refresh</button>
+</div>
 <div class="panel" id="status"></div>
 
 <h2>Open positions</h2>
@@ -219,15 +226,21 @@ function tradesPanel(d){
       <td><span class="pill">${esc(t.reason)}</span></td><td class="num dim">${t.heldSec}s</td></tr>`).join("")+`</table>`;
 }
 
-async function load(){
+async function load(fresh){
+  const btn=$("#refresh");
+  if(fresh){ btn.disabled=true; btn.textContent="refreshing…"; }
   try{
-    const r = await fetch("api/state"+location.search);
+    const q=new URLSearchParams(location.search);
+    if(fresh) q.set("fresh","1");
+    const r = await fetch("api/state"+(q.toString()?"?"+q:""));
     if(!r.ok){ $("#foot").textContent = "api error "+r.status; return; }
     S = await r.json();
     statusPanel(S); openPanel(S); statsPanel(S); chartPanel(S); tradesPanel(S);
-    $("#foot").textContent = "updated "+new Date().toLocaleTimeString()+" · read-only · "+S.meta.note;
+    $("#foot").textContent = "updated "+new Date().toLocaleTimeString()+(fresh?" (forced)":"")+" · read-only · "+S.meta.note;
   }catch(e){ $("#foot").textContent = "unreachable — is the ui server running?"; }
+  finally{ if(fresh){ btn.disabled=false; btn.textContent="refresh"; } }
 }
+$("#refresh").addEventListener("click",()=>load(true));
 document.addEventListener("click", async e => {
   const el = e.target.closest(".ca"); if(!el) return;
   const v = el.dataset.ca;
@@ -243,5 +256,5 @@ $("#tabs").addEventListener("click",e=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===t));
   tab=t.dataset.t; if(S) chartPanel(S);
 });
-load(); setInterval(load, 5000);
+load(); setInterval(()=>load(false), 5000);
 </script></body></html>

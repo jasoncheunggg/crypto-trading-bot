@@ -119,9 +119,9 @@ function trades(): Trade[] {
 /** Marks for OPEN positions only, cached hard. Usually zero calls: the book is normally flat. */
 const markCache = new Map<string, { usd: number | null; at: number }>();
 const MARK_TTL = 15_000;
-async function mark(token: string, rawAmount: bigint, ethUsd: number): Promise<number | null> {
+async function mark(token: string, rawAmount: bigint, ethUsd: number, fresh = false): Promise<number | null> {
   const hit = markCache.get(token);
-  if (hit && Date.now() - hit.at < MARK_TTL) return hit.usd;
+  if (!fresh && hit && Date.now() - hit.at < MARK_TTL) return hit.usd;
   const tx = await zeroExSwapTx({
     chain: CHAIN, sellToken: token, buyToken: NATIVE,
     sellAmountRaw: rawAmount.toString(), slippageBps: 500, taker: account().address,
@@ -132,8 +132,8 @@ async function mark(token: string, rawAmount: bigint, ethUsd: number): Promise<n
 }
 
 let balCache: { usd: number; at: number } | null = null;
-async function liveBalanceUsd(px: number): Promise<number | null> {
-  if (balCache && Date.now() - balCache.at < 15_000) return balCache.usd;
+async function liveBalanceUsd(px: number, fresh = false): Promise<number | null> {
+  if (!fresh && balCache && Date.now() - balCache.at < 15_000) return balCache.usd;
   if (!px) return null;
   const { rpc } = await import("../src/rpc.ts");
   const hex = await rpc<string>(CHAIN, "eth_getBalance", [account().address, "latest"]).catch(() => null);
@@ -143,7 +143,7 @@ async function liveBalanceUsd(px: number): Promise<number | null> {
   return usd;
 }
 
-async function state() {
+async function state(fresh = false) {
   const ts = trades();
   const ethUsd = (await nativeUsd(CHAIN).catch(() => null)) ?? 0;
   const ethUsdEarly = ethUsd;
@@ -160,7 +160,7 @@ async function state() {
    * One eth_getBalance, ~26 CU, cached 15s so a page left open cannot spend budget the bot
    * needs. Falls back to the snapshot if the call fails.
    */
-  const bal = (await liveBalanceUsd(ethUsdEarly)) ?? funds?.balanceUsd ?? 0;
+  const bal = (await liveBalanceUsd(ethUsdEarly, fresh)) ?? funds?.balanceUsd ?? 0;
   const anchor = dailyAnchor(CHAIN, bal);
   const reserve = await reserveUsdPerSwap(CHAIN, ethUsd).catch(() => null);
   const b = checkBreaker(anchor);
@@ -175,7 +175,7 @@ async function state() {
   const openOut = [];
   for (const p of open) {
     const raw = BigInt(Math.floor(p.remainingAmount * 10 ** p.tokenDecimals));
-    const m = raw > 0n ? await mark(p.token, raw, ethUsd) : 0;
+    const m = raw > 0n ? await mark(p.token, raw, ethUsd, fresh) : 0;
     openOut.push({
       token: p.token, source: p.sourceWalletName, costUsd: p.costUsd,
       markUsd: m, pnlUsd: m == null ? null : m - p.costUsd,
@@ -416,7 +416,9 @@ createServer(async (req, res) => {
   }
   if (url.pathname === "/api/state") {
     try {
-      const body = JSON.stringify(await state());
+      /** ?fresh=1 skips the server's own caches, so the button refreshes rather than re-reads.
+       *  Deliberately opt-in: the 5s poll must not spend an eth_getBalance every tick. */
+      const body = JSON.stringify(await state(url.searchParams.get("fresh") === "1"));
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(body);
     } catch (e) {
