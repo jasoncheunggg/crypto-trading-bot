@@ -103,7 +103,8 @@ function statsPanel(d){
   $("#stats").innerHTML =
     card("gross P&L", usd(s.grossUsd), "before gas", cls(s.grossUsd)) +
     card("gas paid", "-"+usd(s.totalGasUsd), s.gasKnown < s.n ? `${s.gasKnown}/${s.n} measured` : `${gasShare.toFixed(0)}% of gross`, "warn") +
-    card("net P&L", usd(s.netUsd), `${s.n} trades, after gas`, cls(s.netUsd)) +
+    card("stuck capital", "-"+usd(s.stuckLostUsd), "paid in, never returned", s.stuckLostUsd>0?"dn":"dim") +
+    card("net P&L", usd(s.trueNetUsd), `${s.n} trades, after gas + stuck`, cls(s.trueNetUsd)) +
     card("win rate", s.winPct.toFixed(0)+"%", `${s.wins}W / ${s.n-s.wins}L`) +
     card("today", usd(s.todayUsd), `${s.todayN} trades · ${usd(s.todayGasUsd)} gas`, cls(s.todayUsd)) +
     card("avg trade", usd(s.avgUsd), `median hold ${s.medianHold}s`, cls(s.avgUsd));

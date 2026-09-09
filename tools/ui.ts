@@ -47,7 +47,7 @@ const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
 interface Trade {
   closedAt: number; token: string; paper: boolean; shadow?: boolean; sourceWalletName: string;
-  costUsd: number; realizedPnlUsd: number; realizedPnlPct: number; peakPct?: number;
+  costUsd: number; proceedsUsd?: number; realizedPnlUsd: number; realizedPnlPct: number; peakPct?: number;
   troughPct?: number; heldSec: number; reason: string; takeProfitPct: number; stopLossPct: number;
   /** Backfilled from gmgn's wallet activity — see tools/backfill-gas.ts. Undefined means
    *  unmeasured, which the UI shows as a dash rather than as zero. */
@@ -114,6 +114,20 @@ async function state() {
   const withGas = ts.filter((t) => gasOf(t) !== undefined);
   const totalGas = withGas.reduce((a, t) => a + (gasOf(t) as number), 0);
 
+  /**
+   * Capital that went into a STUCK position and never came back.
+   *
+   * `stuckRecord` zeroes P&L on a stuck trade so an unsold position cannot book an imaginary
+   * loss and trip the breaker — correct for the breaker, wrong for a P&L headline. Two trades
+   * put $61.96 in and returned $0.00, and the ledger records both as costing nothing. Netting
+   * them out is the difference between "+$98 profit" and the truth.
+   *
+   * Only counted where proceeds really were zero AND nothing is still held: a stuck position
+   * whose tokens were later sold has its real result somewhere else in the ledger already.
+   */
+  const stuckLost = ts.filter((t) => t.reason === "stuck" && (t.proceedsUsd ?? 0) === 0)
+    .reduce((a, t) => a + t.costUsd, 0);
+
   const day = Date.now() / 1000 - 86400;
   const today = ts.filter((t) => t.closedAt >= day);
   const wins = ts.filter((t) => t.realizedPnlUsd > 0).length;
@@ -161,6 +175,8 @@ async function state() {
       totalGasUsd: totalGas,
       grossUsd: ts.reduce((a, t) => a + t.realizedPnlUsd, 0) + totalGas,
       gasKnown: withGas.length,
+      stuckLostUsd: stuckLost,
+      trueNetUsd: ts.reduce((a, t) => a + t.realizedPnlUsd, 0) - stuckLost,
       todayGasUsd: today.reduce((a, t) => a + (gasOf(t) ?? 0), 0),
     },
     trades: ts.map((t) => ({
