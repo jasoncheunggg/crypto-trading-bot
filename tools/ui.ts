@@ -43,11 +43,64 @@ const { zeroExSwapTx } = await import("../src/router-0x.ts");
 const { account } = await import("../src/signer.ts");
 
 const CHAIN = "robinhood" as const;
+
+/**
+ * Token symbols, resolved on chain and cached for the process lifetime.
+ *
+ * The ledger stores addresses, never names — correct, because a symbol is a mutable label and
+ * an address is the thing itself. But a table of 0x3df3… tells you nothing about WHAT was
+ * traded, so the UI resolves them for display only.
+ *
+ * One eth_call per token ever seen, ~26 CU, then never again. Kept in memory rather than
+ * written anywhere: this file's rule is that it never writes to state/, and a cache that
+ * rebuilds in a second is not worth breaking that for.
+ */
+const symbols = new Map<string, string>();
+function decodeSymbol(hex: string): string | null {
+  if (!hex || hex === "0x") return null;
+  const b = hex.slice(2);
+  try {
+    // ABI dynamic string: offset, length, then the bytes.
+    if (b.length >= 128) {
+      const len = parseInt(b.slice(64, 128), 16);
+      if (len > 0 && len <= 64) {
+        const raw = Buffer.from(b.slice(128, 128 + len * 2), "hex").toString("utf8").replace(/\0/g, "").trim();
+        if (raw) return raw;
+      }
+    }
+    // bytes32 symbols, which predate the string convention and still exist.
+    const raw = Buffer.from(b.slice(0, 64), "hex").toString("utf8").replace(/\0/g, "").trim();
+    return /^[\x20-\x7e]{1,32}$/.test(raw) ? raw : null;
+  } catch { return null; }
+}
+async function symbolOf(token: string): Promise<string | null> {
+  const k = token.toLowerCase();
+  if (symbols.has(k)) return symbols.get(k) ?? null;
+  const { rpc } = await import("../src/rpc.ts");
+  const hex = await rpc<string>(CHAIN, "eth_call", [{ to: token, data: "0x95d89b41" }, "latest"]).catch(() => null);
+  const sym = hex ? decodeSymbol(hex) : null;
+  symbols.set(k, sym ?? "");
+  return sym;
+}
+
+/** Which take-profit band a market cap falls in, as a readable label. */
+function tierLabel(mcap: number): string {
+  const tiers = config.exit.takeProfitTiers as { maxMarketCapUsd: number; takeProfitPct: number }[];
+  let lo = 0;
+  for (const t of tiers) {
+    if (mcap < t.maxMarketCapUsd) return `${fmtMc(lo)}-${fmtMc(t.maxMarketCapUsd)}`;
+    lo = t.maxMarketCapUsd;
+  }
+  return `>${fmtMc(lo)}`;
+}
+const fmtMc = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M`
+  : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n));
 const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 
 interface Trade {
   closedAt: number; token: string; paper: boolean; shadow?: boolean; sourceWalletName: string;
   costUsd: number; proceedsUsd?: number; realizedPnlUsd: number; realizedPnlPct: number; peakPct?: number;
+  entryMarketCapUsd?: number;
   troughPct?: number; heldSec: number; reason: string; takeProfitPct: number; stopLossPct: number;
   /** Backfilled from gmgn's wallet activity — see tools/backfill-gas.ts. Undefined means
    *  unmeasured, which the UI shows as a dash rather than as zero. */
@@ -103,6 +156,8 @@ async function state() {
       markUsd: m, pnlUsd: m == null ? null : m - p.costUsd,
       pnlPct: m == null ? 0 : (m / p.costUsd - 1) * 100,
       takeProfitPct: p.takeProfitPct, stopLossPct: p.stopLossPct,
+      symbol: (await symbolOf(p.token)) || null,
+      mcapUsd: p.entryMarketCapUsd, tier: tierLabel(p.entryMarketCapUsd),
       ageMin: Math.floor((Date.now() / 1000 - p.openedAt) / 60),
     });
   }
@@ -182,7 +237,7 @@ async function state() {
       trueNetUsd: ts.reduce((a, t) => a + t.realizedPnlUsd, 0) - stuckLost,
       todayGasUsd: today.reduce((a, t) => a + (gasOf(t) ?? 0), 0),
     },
-    trades: ts.map((t) => ({
+    trades: await Promise.all(ts.map(async (t) => ({
       when: new Date(t.closedAt * 1000).toISOString().slice(5, 16).replace("T", " "),
       token: t.token, source: t.sourceWalletName, costUsd: t.costUsd,
       pnlUsd: t.realizedPnlUsd, pnlPct: t.realizedPnlPct,
@@ -190,7 +245,10 @@ async function state() {
       takeProfitPct: t.takeProfitPct, stopLossPct: t.stopLossPct,
       reason: t.reason, heldSec: t.heldSec,
       gasUsd: gasOf(t) ?? null,
-    })),
+      symbol: (await symbolOf(t.token)) || null,
+      mcapUsd: t.entryMarketCapUsd ?? null,
+      tier: t.entryMarketCapUsd ? tierLabel(t.entryMarketCapUsd) : null,
+    }))),
     byWallet, byReason,
     meta: { note: `${open.length} open · marks cached ${MARK_TTL / 1000}s` },
   };

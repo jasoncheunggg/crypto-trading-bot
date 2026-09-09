@@ -63,6 +63,7 @@ const $ = s => document.querySelector(s);
 const usd = n => (n<0?"-$":"$") + Math.abs(n).toFixed(2);
 const pct = n => (n>=0?"+":"") + n.toFixed(2) + "%";
 const cls = n => n>0?"up":n<0?"dn":"dim";
+const mc = n => n==null?"—":n>=1e6?"$"+(n/1e6).toFixed(2)+"M":n>=1e3?"$"+Math.round(n/1e3)+"k":"$"+Math.round(n);
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 /* Full address in the DOM, shortened only for display — hover shows it, click copies it.
    A truncated CA you cannot recover is useless the moment you want to look a token up. */
@@ -95,9 +96,12 @@ function statusPanel(d){
 
 function openPanel(d){
   if(!d.open.length){ $("#open").innerHTML = '<div class="dim">none</div>'; return; }
-  $("#open").innerHTML = `<table><tr><th>token</th><th>source</th><th class="num">cost</th><th class="num">now</th>
+  $("#open").innerHTML = `<table><tr><th>token</th><th>CA</th><th>source</th><th class="num">mcap</th><th>tier</th><th class="num">cost</th><th class="num">now</th>
     <th class="num">P&L</th><th class="num">target</th><th class="num">stop</th><th class="num">age</th></tr>` +
-    d.open.map(p=>`<tr><td class="acc">${ca(p.token)}</td><td>${esc(p.source)}</td>
+    d.open.map(p=>`<tr><td>${p.symbol?esc(p.symbol):'<span class="dim">?</span>'}</td>
+      <td class="acc">${ca(p.token)}</td><td>${esc(p.source)}</td>
+      <td class="num dim">${mc(p.mcapUsd)}</td>
+      <td><span class="pill">${esc(p.tier)}</span></td>
       <td class="num">${usd(p.costUsd)}</td>
       <td class="num">${p.markUsd==null?'<span class="dn">UNROUTABLE</span>':usd(p.markUsd)}</td>
       <td class="num ${cls(p.pnlUsd||0)}">${p.pnlUsd==null?"—":usd(p.pnlUsd)+" "+pct(p.pnlPct)}</td>
@@ -169,10 +173,14 @@ function chartPanel(d){
 }
 
 function tradesPanel(d){
-  $("#trades").innerHTML=`<table><tr><th>closed</th><th>source</th><th>token</th><th class="num">cost</th>
+  $("#trades").innerHTML=`<table><tr><th>closed</th><th>source</th><th>token</th><th>CA</th><th class="num">mcap</th><th>tier</th><th class="num">cost</th>
     <th class="num">gas</th><th class="num">P&L</th><th class="num">%</th><th class="num">peak</th><th class="num">trough</th><th>reason</th><th class="num">held</th></tr>`+
     d.trades.slice(0,80).map(t=>`<tr><td class="dim">${esc(t.when)}</td><td>${esc(t.source)}</td>
-      <td class="acc">${ca(t.token)}</td><td class="num">${usd(t.costUsd)}</td>
+      <td>${t.symbol?esc(t.symbol):'<span class="dim">?</span>'}</td>
+      <td class="acc">${ca(t.token)}</td>
+      <td class="num dim">${t.mcapUsd==null?"—":mc(t.mcapUsd)}</td>
+      <td><span class="pill">${t.tier?esc(t.tier):"—"} <span class="dim">+${t.takeProfitPct}%</span></span></td>
+      <td class="num">${usd(t.costUsd)}</td>
       <td class="num warn">${t.gasUsd==null?'<span class="dim">—</span>':"-"+usd(t.gasUsd)}</td>
       <td class="num ${cls(t.pnlUsd)}">${usd(t.pnlUsd)}</td><td class="num ${cls(t.pnlPct)}">${pct(t.pnlPct)}</td>
       <td class="num dim">${t.peakPct==null?"—":pct(t.peakPct)}</td>
