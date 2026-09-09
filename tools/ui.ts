@@ -359,8 +359,11 @@ function tunables() {
         ...((e.maxSlippagePctBySignalMarketCap as { maxSignalMarketCapUsd: number; pct: number }[]) ?? [])
           .map((b) => [`  their fill under ${fmtMc(b.maxSignalMarketCapUsd)}`, `${b.pct}%`] as [string, string]),
       ] },
+      // Case-INSENSITIVE, and matches a bare "note" as well as the "…Note" convention. The
+      // first version tested endsWith("Note"), which let a lowercase `note` through — its
+      // paragraph of prose then set the table's width and pushed every value off screen.
       { name: "circuit breaker", rows: Object.entries(r.circuitBreaker as Record<string, unknown>)
-        .filter(([k, v]) => !k.endsWith("Note") && typeof v !== "object")
+        .filter(([k, v]) => !/note$/i.test(k) && typeof v !== "object")
         .map(([k, v]) => [k.replace(/([A-Z])/g, " $1").toLowerCase(), String(v)] as [string, string]) },
     ],
   };

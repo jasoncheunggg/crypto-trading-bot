@@ -25,6 +25,12 @@ tr:hover td{background:#1b2129}
 .tab{padding:5px 12px;border:1px solid var(--line);border-radius:6px;cursor:pointer;color:var(--dim);user-select:none}
 .tab.on{color:var(--fg);border-color:var(--acc);background:#132030}
 .hide{display:none}
+/* Settings values are read straight from config.json, so their length is not under this
+   page's control. Fixed layout plus wrapping means no single value can widen the table and
+   push the others out of view — which a stray prose `note` did. */
+.cfg{table-layout:fixed;width:100%}
+.cfg td:first-child{width:58%;color:var(--dim)}
+.cfg td:last-child{width:42%;word-break:break-word;white-space:normal}
 svg{display:block;width:100%;height:auto;overflow:visible}
 .foot{color:var(--dim);font-size:11px;margin-top:22px;text-align:center}
 .ca{cursor:pointer;border-bottom:1px dotted #2f3b48}
@@ -185,9 +191,9 @@ function chartPanel(d){
     const t=d.tunables;
     el.innerHTML=`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
       <div><div class="dim" style="margin-bottom:6px">take-profit by market cap</div>
-        <table>${t.tiers.map(x=>`<tr><td>${esc(x.band)}</td><td class="num up">+${x.takeProfitPct}%</td></tr>`).join("")}</table></div>
+        <table class="cfg">${t.tiers.map(x=>`<tr><td>${esc(x.band)}</td><td class="num up">+${x.takeProfitPct}%</td></tr>`).join("")}</table></div>
       ${t.groups.map(g=>`<div><div class="dim" style="margin-bottom:6px">${esc(g.name)}</div>
-        <table>${g.rows.map(r=>`<tr><td>${esc(r[0])}</td><td class="num">${esc(r[1])}</td></tr>`).join("")}</table></div>`).join("")}
+        <table class="cfg">${g.rows.map(r=>`<tr><td>${esc(r[0])}</td><td class="num">${esc(r[1])}</td></tr>`).join("")}</table></div>`).join("")}
     </div>
     <div class="dim" style="margin-top:10px">read live from config.json — this cannot disagree with what the bot is using</div>`;
   } else {
