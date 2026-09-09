@@ -134,8 +134,10 @@ const ethUsd = ethUsdEarly;
 const toUsd = (w: number) => w * ethUsd;
 
 console.log("\n\x1b[1mWALLET\x1b[0m  " + acct.address + "  \x1b[2m(self-custody, signable)\x1b[0m");
-console.log(`  native ETH   ${(Number(ethBal) / 1e18).toFixed(8)}   ${usd(toUsd(Number(ethBal) / 1e18))}`);
-console.log(`  WETH         ${(Number(weth) / 1e18).toFixed(8)}   ${usd(toUsd(Number(weth) / 1e18))}   <- tradable`);
+// Native is the trading asset under v2.0, so it carries the "tradable" marker. WETH is shown
+// only because a rescue or a manual tool can still leave a balance there.
+console.log(`  native ETH   ${(Number(ethBal) / 1e18).toFixed(8)}   ${usd(toUsd(Number(ethBal) / 1e18))}   <- tradable`);
+if (weth > 0n) console.log(`  WETH         ${(Number(weth) / 1e18).toFixed(8)}   ${usd(toUsd(Number(weth) / 1e18))}   \x1b[33m<- unwrap this\x1b[0m`);
 if (usdg > 0n) console.log(`  USDG         ${(Number(usdg) / 1e6).toFixed(6)}`);
 console.log(`  allowance    ${allowance === 0n ? "\x1b[31mNONE — cannot buy\x1b[0m" : allowance > 10n ** 30n ? "unlimited" : String(allowance)}`);
 console.log(`  gas          ${(Number(gas) / 1e9).toFixed(4)} gwei    nonce ${nonce}    ETH $${ethUsd.toFixed(2)}`);

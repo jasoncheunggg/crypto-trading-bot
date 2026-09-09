@@ -18,8 +18,8 @@
       "modeNote": "Capital cannot move between chains mid-trade. Each chain funds its own signals, so position size derives from THAT chain's tradable balance, never the combined total.",
       "perChain": {
         "robinhood": {
-          "gasReserveUsd": 3.0,
-          "gasReserveNote": "Native ETH held back from trading. Raised 0.5 -> 3.0 for v2.0: gas and trading capital are now the SAME asset, so this is the only thing keeping a position from spending the money needed to exit it. At ~$0.13/swap measured on 2026-09-08 this is ~23 swaps of headroom \u2014 one entry plus a full ladder on two concurrent positions, several times over.",
+          "gasReserveUsd": 8.0,
+          "gasReserveNote": "Native ETH held back from trading. Raised 3 -> 8 now the wallet is funded. Gas and trading capital are the same asset, so this is the only thing stopping a position spending the money needed to exit it. At the ~$0.12/swap measured on 0x that is ~65 swaps, but the number that matters is a SPIKE: gmgn-era routing hit $2.72/swap, and at that price $3 covered barely one exit. $8 is trivial against $238 and buys real headroom.",
           "lastKnownUsd": 16.75,
           "paperOverrideUsd": 200
         },
@@ -36,7 +36,7 @@
       "valuationSourceNote": "Read balances from Alchemy. GMGN's history_total_buys reports 0 even for $83k positions it misclassifies, which would value a funded portfolio at $0 and halt every chain.",
       "sizingNote": "Paper sizing is recomputed from the ledger on EVERY signal, not on a schedule. The old refreshIntervalHours/refreshOnStartup keys were never wired to anything and have been removed so they cannot imply behaviour that does not exist."
     },
-    "maxConcurrentPositions": 1,
+    "maxConcurrentPositions": 2,
     "positionSizePctOfPortfolio": 15,
     "minPositionSizeUsd": 5,
     "onSignalAtPositionCap": "skip",
@@ -72,9 +72,9 @@
     "maxGasGwei": 1.2,
     "maxGasGweiNote": "Refuse new ENTRIES above this gas price. Exits are never blocked - refusing to sell is the unbounded failure. Derived 2026-09-04 from 48 live trades: mean gross edge is $2.68/trade before gas, and at the measured median of 356,561 gas units a round trip costs $0.70 at 0.4 gwei, $1.75 at 1.0, $2.63 at 1.5 (breakeven) and $3.50 at 2.0 (a guaranteed $0.83 loss). 1.2 sits below breakeven and just above the p90 of 0.968 gwei across 113 real swaps, so it blocks almost nothing historically traded while cutting off everything that loses. SCALES WITH POSITION SIZE: at $50 positions breakeven moves to ~3.0 gwei, so raise this if sizing up. Coarse by design - it uses gwei alone, while the p90 route burns 1,033,769 units and loses money well below this line; the precise version would gate on the quotes own gas_limit.",
     "gasTopUpNote": "Removed with gastank.ts. v1.0 held USDG and paid gas in ETH, so refilling gas was a routed swap that needed cooldowns, a daily cap and a refusal-while-open. v2.0 trades native ETH: gas and capital are one pot and the refill does not exist.",
-    "fixedPositionUsd": 5,
-    "fixedPositionUsdNote": "TEST ONLY \u2014 overrides positionSizePctOfPortfolio. At $10.93 tradable the 15% rule gives $1.64, under minPositionSizeUsd, so every signal would be rejected and the run would prove nothing. Set back to null once the wallet is funded.",
-    "maxConcurrentPositionsTestNote": "TEST ONLY \u2014 was 2. stopAfterTrades counts CLOSED trades, so with a cap of 2 the bot could open a second position before the first closed and the run would spend twice. Restore to 2 with fixedPositionUsd when the wallet is funded."
+    "fixedPositionUsd": 10,
+    "fixedPositionUsdNote": "SHAKEDOWN SIZE, not the production rule. The 15%-of-portfolio rule would size $35 on the current $238 balance, which is too much to risk on a stack with exactly ONE clean live round trip on record \u2014 two of three live entries so far hit a bug the test suites could not see. $10 keeps a bad day near -$40 while still being large enough that gas (~1.2% of position) does not dominate the reading, which it does at $5 (~2.4%). Clear this to null once ~15-20 trades have run without a new failure.",
+    "maxConcurrentPositionsTestNote": "Back to 2. Held at 1 during single-trade testing. Two is what exercises the nonce lock in signer.ts, which has never been contended \u2014 every v2.0 transaction so far has been sequential."
   },
   "detection": {
     "provider": "alchemy",
@@ -349,8 +349,8 @@
     "dryRun": false,
     "logOnly": false,
     "logLevel": "info",
-    "stopAfterTrades": 1,
-    "stopAfterTradesNote": "Stop cleanly after N CLOSED live trades, so a run covers a whole round trip rather than stopping with capital still in a token. Shadows do not count. Never exits with a position still open. null for normal operation."
+    "stopAfterTrades": null,
+    "stopAfterTradesNote": "null = run continuously. Set to 1 on 2026-09-08 to prove a single round trip with real money; that is done (CHAOS, -$0.44, correct accounting throughout)."
   },
   "_secrets": "API keys live in .env (gitignored). ${VAR} placeholders here are resolved from the environment at startup."
 }
