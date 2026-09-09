@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { config } from "./config.ts";
 import { rpc } from "./rpc.ts";
 import { tokenBalance, isNative, toRawUnits } from "./reconcile.ts";
+import { setNativeUsd } from "./money.ts";
 import type { Chain } from "./types.ts";
 import { ZeroExRouter, zeroExSwapTx } from "./router-0x.ts";
 import type { ZeroExSwapTx } from "./router-0x.ts";
@@ -181,6 +182,7 @@ function refreshNative(chain: Chain): Promise<number | null> {
     const onChain = await nativeUsdFromChain(chain);
     if (onChain !== null) {
       nativePrice.set(chain, { usd: onChain, at: Date.now() });
+      setNativeUsd(chain, onChain);        // the sync hot paths read this, see money.ts
       return onChain;
     }
     return nativeUsdFrom0x(chain);
@@ -224,6 +226,7 @@ async function nativeUsdFrom0x(chain: Chain): Promise<number | null> {
   const usd = q?.outputAmount;
   if (usd === undefined || !Number.isFinite(usd) || usd <= 0) return null;
   nativePrice.set(chain, { usd, at: Date.now() });
+  setNativeUsd(chain, usd);
   return usd;
 }
 

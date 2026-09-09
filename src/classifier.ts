@@ -1,4 +1,5 @@
 import { config } from "./config.ts";
+import { usdRates, legUsd, isDollarAsset } from "./money.ts";
 import { rpc, tokenDecimals, totalSupply } from "./rpc.ts";
 import type { Chain, Signal, Verdict, Wallet } from "./types.ts";
 
@@ -31,6 +32,7 @@ export async function classifyEvm(
   if (!receipt || (receipt.status !== undefined && BigInt(receipt.status) === 0n)) return null;
 
   const quotes = config.quoteAssets[chain] ?? {};
+  const rates = usdRates(chain);
   const me = wallet.address.toLowerCase();
   /**
    * Whether FOMO executed this. Needed BEFORE the payment legs are read, because it decides
@@ -79,13 +81,38 @@ export async function classifyEvm(
     if (from === me) tokenDelta.set(asset, (tokenDelta.get(asset) ?? 0n) - amount);
   }
 
+  // Every leg carries BOTH its own units and its dollar value, so nothing downstream has to
+  // know which asset it is looking at. `usd` is null when the rate is unknown — never 0,
+  // because "could not price" and "worth nothing" lead to opposite decisions.
   const legs = [...quoteMax.entries()].map(([addr, raw]) => {
     const q = quotes[addr]!;
-    return { symbol: q.symbol, amount: Number(raw) / 10 ** q.decimals, isSizingAsset: q.isSizingAsset };
+    return {
+      symbol: q.symbol,
+      amount: Number(raw) / 10 ** q.decimals,
+      usd: legUsd(rates, addr, raw),
+      dollarLeg: isDollarAsset(rates, addr),
+      isSizingAsset: q.isSizingAsset,
+    };
   });
-  // Dust below the floor is fee/routing noise, not payment.
-  const paid = legs.filter((l) => l.amount >= config.minQuoteMovementUsd);
-  const sizeUsd = Math.max(0, ...paid.filter((l) => l.isSizingAsset).map((l) => l.amount));
+  // Dust below the floor is fee/routing noise, not payment. Compared in DOLLARS: the old
+  // version compared a raw amount against a USD threshold, so 0.0003 WETH — 75 cents, well
+  // above the floor — was discarded as dust while 0.57 WETH passed as though it were 57 cents.
+  const paid = legs.filter((l) => l.usd !== null && l.usd >= config.minQuoteMovementUsd);
+  /**
+   * The PAYMENT leg sizes the trade, and a dollar-denominated one is preferred when present.
+   *
+   * A routed FOMO buy carries the same money twice — USDG in, WETH through the hop — and the
+   * two differ by fees and by whatever the ETH rate has done. Taking the max across legs
+   * silently sized 18 of 70 historical buys off the hop instead of the payment, moving them
+   * ~1.5%. Preferring the dollar leg reproduces v1.0 exactly where a dollar leg exists.
+   *
+   * Falling back to any priceable leg is what closes the ETH blind spot: a buy settled purely
+   * in ETH has no dollar leg at all, and used to size at $0.00 and be rejected under
+   * minTradeUsd — which in the logs was indistinguishable from a quiet market.
+   */
+  const dollarPaid = paid.filter((l) => l.dollarLeg);
+  const sizing = dollarPaid.length ? dollarPaid : paid;
+  const sizeUsd = Math.max(0, ...sizing.map((l) => l.usd as number));
 
   const biggest = [...tokenDelta.entries()]
     .sort((a, b) => (b[1] < 0n ? -b[1] : b[1]) > (a[1] < 0n ? -a[1] : a[1]) ? 1 : -1)[0];

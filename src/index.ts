@@ -108,7 +108,8 @@ async function onSignal(s: Signal): Promise<void> {
   console.log(`   token   ${s.token}`);
   console.log(`   amount  ${s.tokenAmount >= 0 ? "+" : ""}${s.tokenAmount.toLocaleString("en-US", { maximumFractionDigits: 6 })}`);
   console.log(`   signal  ${s.sizeUsd ? usd(s.sizeUsd) : "nothing paid"}` +
-    (s.quoteLegs.length ? `   legs ${s.quoteLegs.map((l) => `${l.symbol} ${l.amount.toFixed(2)}${l.isSizingAsset ? "*" : ""}`).join(", ")}` : ""));
+    (s.quoteLegs.length ? `   legs ${s.quoteLegs.map((l) =>
+      `${l.symbol} ${l.amount.toFixed(l.symbol === "WETH" ? 4 : 2)}${l.usd === null ? "(?)" : `=$${l.usd.toFixed(2)}`}`).join(", ")}` : ""));
   console.log(`   router  ${s.viaKnownRouter ? "FOMO" : "not FOMO"}`);
   console.log(`   tx      ${s.txHash}`);
 

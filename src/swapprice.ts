@@ -1,4 +1,5 @@
 import { config } from "./config.ts";
+import { usdRates, legUsd } from "./money.ts";
 import { rpc, tokenDecimals } from "./rpc.ts";
 import type { Chain } from "./types.ts";
 
@@ -231,8 +232,12 @@ export class SwapPriceFeed {
 
     const quote = config.quoteAssets[chain]?.[addr];
     if (quote) {
-      if (!quote.isSizingAsset) return;   // no USD rate for it; a guess is worse than a gap
-      const usd = Number(amount) / 10 ** quote.decimals;
+      // Was: skip anything not dollar-denominated, "no USD rate for it; a guess is worse than
+      // a gap". There is a rate now — legUsd carries one for every priceable asset — so an
+      // ETH-settled swap prices correctly instead of being dropped. Still a gap, never a
+      // guess: null means the rate is unknown and the leg is skipped.
+      const usd = legUsd(usdRates(chain), addr, amount);
+      if (usd === null) return;
       for (const k of this.watched.keys()) {
         if (k.startsWith(`${chain}:`)) this.touch(k, log.transactionHash, (p) => {
           p.quoteLegs++;
@@ -357,7 +362,10 @@ export async function priceFromTx(
     const addr = log.address.toLowerCase();
     const amount = big(log.data);
     const q = quotes[addr];
-    if (q?.isSizingAsset) maxQuoteUsd = Math.max(maxQuoteUsd, Number(amount) / 10 ** q.decimals);
+    if (q) {
+      const u = legUsd(usdRates(chain), addr, amount);
+      if (u !== null) maxQuoteUsd = Math.max(maxQuoteUsd, u);
+    }
     else if (addr === token.toLowerCase() && amount > maxToken) maxToken = amount;
   }
   const tokens = Number(maxToken) / 10 ** dec;

@@ -95,24 +95,28 @@
           "0x5fc5360d0400a0fd4f2af552add042d716f1d168": {
             "symbol": "USDG",
             "decimals": 6,
-            "isSizingAsset": true
+            "isSizingAsset": true,
+            "priceSource": "dollar"
           },
           "0x0bd7d308f8e1639fab988df18a8011f41eacad73": {
             "symbol": "WETH",
             "decimals": 18,
-            "isSizingAsset": false
+            "isSizingAsset": false,
+            "priceSource": "native"
           }
         },
         "bsc": {
           "0x55d398326f99059ff775485246999027b3197955": {
             "symbol": "USDT",
             "decimals": 18,
-            "isSizingAsset": true
+            "isSizingAsset": true,
+            "priceSource": "dollar"
           },
           "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": {
             "symbol": "USDC",
             "decimals": 18,
-            "isSizingAsset": true
+            "isSizingAsset": true,
+            "priceSource": "dollar"
           }
         }
       },
@@ -123,7 +127,8 @@
       "emitStagingTransfers": true,
       "knownRoutersNote": "FOMO uses at least two contracts: 0xccc88a9d (selector 0x0a2b8f36) and 0x4337084d (0x765e827f). The second carries ~87% of qualifying volume across the roster. Losing it means silently skipping most real trades.",
       "requireKnownRouter": true,
-      "flagUnknownRouterAboveUsd": 950
+      "flagUnknownRouterAboveUsd": 950,
+      "quoteAssetsNote": "priceSource says how a leg becomes dollars: 'dollar' means its units already are USD, 'native' means multiply by the chain's native price. Explicit rather than inferred from the symbol \u2014 the entire class of bug this replaces came from assuming a quote asset's units were money. See src/money.ts. isSizingAsset is retained only for the '*' marker in signal logs and for locating the wrapped/sizing addresses in live.ts; it no longer governs pricing."
     },
     "reorgSafetyBlocks": 2,
     "decoders": {

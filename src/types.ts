@@ -42,7 +42,9 @@ export interface Signal {
   /** Trade size in USD, from the largest single sizing-asset transfer. 0 when nothing was paid. */
   sizeUsd: number;
   /** Every quote asset that moved, for diagnostics. */
-  quoteLegs: { symbol: string; amount: number; isSizingAsset: boolean }[];
+  /** Every quote leg, in its OWN units and in dollars. `usd` is null when the rate is
+   *  unknown — never 0, which would read as "worth nothing". */
+  quoteLegs: { symbol: string; amount: number; usd: number | null; dollarLeg: boolean; isSizingAsset: boolean }[];
   /** Market cap implied by this fill: sizeUsd / tokenAmount * totalSupply. 0 when not a paid trade. */
   impliedMarketCapUsd: number;
   viaKnownRouter: boolean;

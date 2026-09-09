@@ -1,5 +1,6 @@
 import { rpc, tokenDecimals } from "./rpc.ts";
 import { config } from "./config.ts";
+import { usdRates, legUsd } from "./money.ts";
 import { affordable } from "./cu.ts";
 import type { Chain } from "./types.ts";
 
@@ -121,6 +122,7 @@ async function lookup(
 ): Promise<Verified | null> {
   if (!affordable()) return null;
   const quotes = config.quoteAssets[chain] ?? {};
+  const rates = usdRates(chain);
   const dec = await tokenDecimals(chain, token);
   // Two blocks back: logs for the very newest block are not always indexed yet, and asking
   // for them fails the whole range rather than returning fewer results.
@@ -137,8 +139,14 @@ async function lookup(
       const a = l.address.toLowerCase();
       const v = big(l.data);
       const q = quotes[a];
-      if (q?.isSizingAsset) { quoteLegs++; maxQuoteUsd = Math.max(maxQuoteUsd, Number(v) / 10 ** q.decimals); }
-      else if (a === token.toLowerCase()) { tokenLegs++; if (v > maxToken) maxToken = v; }
+      // Any PRICEABLE quote asset, not only the dollar one. Restricting this to USDG meant a
+      // token trading in ETH could not be verified at all: every candidate returned null, the
+      // quorum never filled, and misprice protection silently degraded to the unverified feed.
+      if (q) {
+        const u = legUsd(rates, a, v);
+        if (u !== null) { quoteLegs++; maxQuoteUsd = Math.max(maxQuoteUsd, u); }
+      }
+      if (!q && a === token.toLowerCase()) { tokenLegs++; if (v > maxToken) maxToken = v; }
     }
     if (tokenLegs > 6 || quoteLegs > 4) return null;      // batched: unpriceable, not guessable
     const tokens = Number(maxToken) / 10 ** dec;
