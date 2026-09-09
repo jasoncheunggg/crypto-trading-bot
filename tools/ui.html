@@ -99,10 +99,13 @@ function statsPanel(d){
   const s = d.stats;
   const card = (label,val,sub,c) => `<div class="panel"><div class="dim">${label}</div>
     <div class="big ${c||""}">${val}</div><div class="dim">${sub}</div></div>`;
+  const gasShare = s.grossUsd > 0 ? (s.totalGasUsd / s.grossUsd * 100) : 0;
   $("#stats").innerHTML =
-    card("net P&L (live)", usd(s.netUsd), `${s.n} trades`, cls(s.netUsd)) +
+    card("gross P&L", usd(s.grossUsd), "before gas", cls(s.grossUsd)) +
+    card("gas paid", "-"+usd(s.totalGasUsd), s.gasKnown < s.n ? `${s.gasKnown}/${s.n} measured` : `${gasShare.toFixed(0)}% of gross`, "warn") +
+    card("net P&L", usd(s.netUsd), `${s.n} trades, after gas`, cls(s.netUsd)) +
     card("win rate", s.winPct.toFixed(0)+"%", `${s.wins}W / ${s.n-s.wins}L`) +
-    card("today", usd(s.todayUsd), `${s.todayN} trades`, cls(s.todayUsd)) +
+    card("today", usd(s.todayUsd), `${s.todayN} trades · ${usd(s.todayGasUsd)} gas`, cls(s.todayUsd)) +
     card("avg trade", usd(s.avgUsd), `median hold ${s.medianHold}s`, cls(s.avgUsd));
 }
 
@@ -156,9 +159,10 @@ function chartPanel(d){
 
 function tradesPanel(d){
   $("#trades").innerHTML=`<table><tr><th>closed</th><th>source</th><th>token</th><th class="num">cost</th>
-    <th class="num">P&L</th><th class="num">%</th><th class="num">peak</th><th class="num">trough</th><th>reason</th><th class="num">held</th></tr>`+
+    <th class="num">gas</th><th class="num">P&L</th><th class="num">%</th><th class="num">peak</th><th class="num">trough</th><th>reason</th><th class="num">held</th></tr>`+
     d.trades.slice(0,80).map(t=>`<tr><td class="dim">${esc(t.when)}</td><td>${esc(t.source)}</td>
       <td class="acc">${esc(t.token.slice(0,12))}</td><td class="num">${usd(t.costUsd)}</td>
+      <td class="num warn">${t.gasUsd==null?'<span class="dim">—</span>':"-"+usd(t.gasUsd)}</td>
       <td class="num ${cls(t.pnlUsd)}">${usd(t.pnlUsd)}</td><td class="num ${cls(t.pnlPct)}">${pct(t.pnlPct)}</td>
       <td class="num dim">${t.peakPct==null?"—":pct(t.peakPct)}</td>
       <td class="num dim">${t.troughPct==null?"—":pct(t.troughPct)}</td>

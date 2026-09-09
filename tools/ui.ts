@@ -49,6 +49,9 @@ interface Trade {
   closedAt: number; token: string; paper: boolean; shadow?: boolean; sourceWalletName: string;
   costUsd: number; realizedPnlUsd: number; realizedPnlPct: number; peakPct?: number;
   troughPct?: number; heldSec: number; reason: string; takeProfitPct: number; stopLossPct: number;
+  /** Backfilled from gmgn's wallet activity — see tools/backfill-gas.ts. Undefined means
+   *  unmeasured, which the UI shows as a dash rather than as zero. */
+  entryGasUsd?: number; exitGasUsd?: number;
 }
 function trades(): Trade[] {
   try {
@@ -104,6 +107,13 @@ async function state() {
     });
   }
 
+  /** Gas is only counted where it was actually measured, so a partial ledger cannot understate
+   *  it into looking free. `gasKnown` says how much of the sample carries a figure. */
+  const gasOf = (t: Trade) => (t.entryGasUsd === undefined && t.exitGasUsd === undefined)
+    ? undefined : (t.entryGasUsd ?? 0) + (t.exitGasUsd ?? 0);
+  const withGas = ts.filter((t) => gasOf(t) !== undefined);
+  const totalGas = withGas.reduce((a, t) => a + (gasOf(t) as number), 0);
+
   const day = Date.now() / 1000 - 86400;
   const today = ts.filter((t) => t.closedAt >= day);
   const wins = ts.filter((t) => t.realizedPnlUsd > 0).length;
@@ -147,6 +157,11 @@ async function state() {
       todayUsd: today.reduce((a, t) => a + t.realizedPnlUsd, 0), todayN: today.length,
       avgUsd: ts.length ? ts.reduce((a, t) => a + t.realizedPnlUsd, 0) / ts.length : 0,
       medianHold: holds.length ? holds[holds.length >> 1] : 0,
+      // realizedPnlUsd is already NET of gas, so gross is net + gas rather than the reverse.
+      totalGasUsd: totalGas,
+      grossUsd: ts.reduce((a, t) => a + t.realizedPnlUsd, 0) + totalGas,
+      gasKnown: withGas.length,
+      todayGasUsd: today.reduce((a, t) => a + (gasOf(t) ?? 0), 0),
     },
     trades: ts.map((t) => ({
       when: new Date(t.closedAt * 1000).toISOString().slice(5, 16).replace("T", " "),
@@ -155,6 +170,7 @@ async function state() {
       peakPct: t.peakPct ?? null, troughPct: t.troughPct ?? null,
       takeProfitPct: t.takeProfitPct, stopLossPct: t.stopLossPct,
       reason: t.reason, heldSec: t.heldSec,
+      gasUsd: gasOf(t) ?? null,
     })),
     byWallet, byReason,
     meta: { note: `${open.length} open · marks cached ${MARK_TTL / 1000}s` },
