@@ -98,7 +98,7 @@ function statusPanel(d){
     <div><div class="dim">wallets</div><div class="big">${d.config.wallets}</div>
       <div class="dim">tracked · ${esc(d.config.router)} router</div></div>
     <div><div class="dim">ETH</div><div class="big">$${d.wallet.ethUsd.toFixed(0)}</div>
-      <div class="dim">${d.wallet.nativeEth.toFixed(6)} held</div></div>
+      <div class="${/DISAGREE/.test(d.wallet.ethUsdSource||"")?"warn":"dim"}" style="font-size:11px">${esc(d.wallet.ethUsdSource||"")}</div></div>
   </div>`;
 }
 

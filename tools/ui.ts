@@ -37,7 +37,8 @@ const { openPositions } = await import("../src/positions.ts");
 const { checkBreaker } = await import("../src/breaker.ts");
 const { fundsFor, sizePosition } = await import("../src/portfolio.ts");
 const { dailyAnchor } = await import("../src/balance.ts");
-const { nativeUsd } = await import("../src/live.ts");
+const live = await import("../src/live.ts");
+const { nativeUsd } = live;
 const { currentGwei, roundTripsLeft, reserveUsdPerSwap } = await import("../src/gas.ts");
 const { zeroExSwapTx } = await import("../src/router-0x.ts");
 const { account } = await import("../src/signer.ts");
@@ -207,7 +208,7 @@ async function state() {
     process: { running, uptime },
     wallet: {
       balanceUsd: bal, tradableUsd: funds?.tradableUsd ?? 0, gasReserveUsd: funds?.gasReserveUsd ?? 0,
-      ethUsd, gwei, nativeEth: ethUsd ? bal / ethUsd : 0,
+      ethUsd, ethUsdSource: live.lastPriceSource, gwei, nativeEth: ethUsd ? bal / ethUsd : 0,
       roundTrips: roundTripsLeft(bal, reserve),
     },
     anchor,

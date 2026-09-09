@@ -4,6 +4,7 @@ import { config } from "./config.ts";
 import { rpc } from "./rpc.ts";
 import { tokenBalance, isNative, toRawUnits } from "./reconcile.ts";
 import { setNativeUsd } from "./money.ts";
+import { gmgn } from "./gmgn.ts";
 import type { Chain } from "./types.ts";
 import { ZeroExRouter, zeroExSwapTx } from "./router-0x.ts";
 import type { ZeroExSwapTx } from "./router-0x.ts";
@@ -190,27 +191,87 @@ export async function nativeUsd(chain: Chain): Promise<number | null> {
 }
 
 /** Fetch and cache. Chain first, 0x only if the chain cannot answer. */
+/** gmgn's own price for the wrapped native token. A DATA endpoint — unaffected by the swap
+ *  reprice that took v1.0 offline, and free on the current plan. ~510ms. */
+async function nativeUsdFromGmgn(chain: Chain): Promise<number | null> {
+  const w = INPUT_WETH[chain];
+  if (!w) return null;
+  try {
+    const stdout = await gmgn(["token", "info", "--chain", chain, "--address", w, "--raw"], 15_000);
+    const d = JSON.parse(stdout) as { price?: { price?: string } | string };
+    const raw = typeof d.price === "object" ? d.price?.price : d.price;
+    const usd = Number(raw);
+    return Number.isFinite(usd) && usd > 0 ? usd : null;
+  } catch { return null; }
+}
+
+/** How far apart two prices may be before they are not corroborating each other. */
+const AGREE_PCT = 0.02;
+const apart = (a: number, b: number) => Math.abs(a / b - 1);
+
+/**
+ * Resolve the native price from TWO INDEPENDENT SOURCES and require them to agree.
+ *
+ * The previous design trusted one chain-derived reading, sanity-bounded. That reading comes
+ * from dividing the largest WETH leg of one receipt by its largest USDG leg, which on a split
+ * or multi-hop route are not the same money — on 2026-09-09 it returned $3,350 against a true
+ * $2,512 and cached it for ten minutes. A band around the last good price catches that, but
+ * only afterwards, and it cannot tell a bad pairing from a genuine 10% move.
+ *
+ * Corroboration is the stronger test, and it is nearly free here: this refreshes at most once
+ * every ten minutes, so two sources cost six calls an hour each. 0x is asked for a real
+ * WETH->USDG route; gmgn is asked for its own price, from a DATA endpoint unaffected by the
+ * reprice that took v1.0's trading offline. They are independent — different infrastructure,
+ * different method — so agreement is meaningful rather than two copies of one mistake.
+ *
+ * Chain-derived survives as the LAST resort, because it is the only source that still answers
+ * when both APIs are down, and losing all pricing was the failure v2.0 exists to prevent.
+ */
 function refreshNative(chain: Chain): Promise<number | null> {
   const running = nativeInflight.get(chain);
   if (running) return running;
   const p = (async () => {
-    // With no reference the band above cannot apply, so the FIRST price of a process comes
-    // from 0x rather than from a single unverified receipt. One call, once, at startup.
-    if (nativePrice.get(chain) === undefined) {
-      const seed = await nativeUsdFrom0x(chain);
-      if (seed !== null) return seed;
+    const accept = (usd: number, how: string) => {
+      nativePrice.set(chain, { usd, at: Date.now() });
+      setNativeUsd(chain, usd);            // the sync hot paths read this, see money.ts
+      lastPriceSource = how;
+      return usd;
+    };
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const [zx, gm] = await Promise.all([
+        nativeUsdFrom0x(chain).catch(() => null),
+        nativeUsdFromGmgn(chain).catch(() => null),
+      ]);
+      if (zx !== null && gm !== null) {
+        if (apart(zx, gm) <= AGREE_PCT) return accept((zx + gm) / 2, `0x+gmgn agree (${(apart(zx, gm) * 100).toFixed(2)}%)`);
+        // They disagree. One retry, because a stale cache on either side resolves itself.
+        if (attempt === 0) continue;
+        // Still disagreeing: refuse to pick a winner. A price we cannot corroborate is worse
+        // than a slightly old one we could, and everything downstream is denominated in it.
+        const held = nativePrice.get(chain);
+        if (held) { lastPriceSource = `DISAGREE 0x $${zx.toFixed(2)} vs gmgn $${gm.toFixed(2)} — holding last`; return held.usd; }
+        return accept(Math.min(zx, gm), `DISAGREE, took the lower`);
+      }
+      // Only one answered. One source beats none, and it is still an API rather than a
+      // single receipt.
+      if (zx !== null) return accept(zx, "0x only");
+      if (gm !== null) return accept(gm, "gmgn only");
+      break;
     }
+
+    // Both APIs are unreachable. Fall back to the chain, still bounded against the last good
+    // price so a bad pairing cannot take hold unnoticed.
     const onChain = await nativeUsdFromChain(chain);
-    if (onChain !== null) {
-      nativePrice.set(chain, { usd: onChain, at: Date.now() });
-      setNativeUsd(chain, onChain);        // the sync hot paths read this, see money.ts
-      return onChain;
-    }
-    return nativeUsdFrom0x(chain);
+    if (onChain !== null) return accept(onChain, "chain fallback");
+    return nativePrice.get(chain)?.usd ?? null;
   })().finally(() => nativeInflight.delete(chain));
   nativeInflight.set(chain, p);
   return p;
 }
+
+/** How the live price was last established, for the dashboard and for logs. */
+export let lastPriceSource = "not yet resolved";
 
 /** Pay the first lookup at startup so no signal ever waits for it. */
 export function warmNativeUsd(chain: Chain): void {
@@ -246,8 +307,10 @@ async function nativeUsdFrom0x(chain: Chain): Promise<number | null> {
   });
   const usd = q?.outputAmount;
   if (usd === undefined || !Number.isFinite(usd) || usd <= 0) return null;
-  nativePrice.set(chain, { usd, at: Date.now() });
-  setNativeUsd(chain, usd);
+  // Deliberately does NOT write the cache. This is a PROBE, and refreshNative decides whether
+  // a probe becomes the accepted price. Writing here made the disagreement branch "hold the
+  // last price" when the only thing in the cache was this probe's own answer — corroboration
+  // checking its own homework.
   return usd;
 }
 
