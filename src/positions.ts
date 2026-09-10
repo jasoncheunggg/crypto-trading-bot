@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { config } from "./config.ts";
+import { tradingBlocked } from "./signer.ts";
 import type { Chain, Signal } from "./types.ts";
 
 const DIR = resolve(import.meta.dirname, "..", "state");
@@ -140,7 +141,22 @@ export function open(
     stopLossPct: config.risk.stopLossPct,
     breakevenPrice: breakeven(entryPrice, costUsd, gasUsdPerSwap),
     status: "open", shadow,
-    paper: config.mode.dryRun,
+    /**
+     * Whether this position is REAL must come from the same predicate that decides whether to
+     * actually swap. It used to read `config.mode.dryRun`, while the entry path asked
+     * liveTrading() — which additionally requires BOT_ALLOW_AUTOMATED_TRADES=1. The two agree
+     * until that variable is missing, and then they disagree in the worst possible direction:
+     * the bot takes a PAPER entry and records it as a live trade.
+     *
+     * That happened on 2026-09-10. A restart did not carry the variable through, and seven
+     * simulated trades were written into the live ledger with no entry transaction between
+     * them, crediting $60.11 of profit that never existed and feeding the circuit breaker
+     * fictional wins. Nothing was lost — nothing was ever bought — but the books said
+     * otherwise for a day.
+     *
+     * tradingBlocked() is that single predicate: null means a swap would really be sent.
+     */
+    paper: tradingBlocked() !== null,
   };
   positions.push(p); save();
   return p;
