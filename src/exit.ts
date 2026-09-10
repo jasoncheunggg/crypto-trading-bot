@@ -4,6 +4,8 @@ import type { SwapPriceFeed } from "./swapprice.ts";
 import { verifyPrice } from "./verify.ts";
 import type { Position } from "./positions.ts";
 import { noteExcursion } from "./positions.ts";
+import { tokenBalance, saleFromTx } from "./reconcile.ts";
+import { cachedNativeUsd } from "./money.ts";
 
 /**
  * How often the position is evaluated. Prices arrive from the live feed as trades land, so
@@ -175,7 +177,10 @@ export class ExitManager {
      */
     sellFn?: (tokens: number, reason: ExitReason, atPrice: number, noFloor?: boolean) =>
       Promise<{ ok: true; tokens: number; proceedsUsd: number }
-        | { ok: false; error: string; terminal?: boolean; gasBlocked?: boolean }>,
+        | { ok: false; error: string; terminal?: boolean; gasBlocked?: boolean;
+            /** Set when the transaction reached the network despite the failure — the
+             *  money may already have moved, so this is a hash to CONFIRM, not retry. */
+            hash?: string; broadcast?: boolean }>,
     /**
      * Can the wallet currently afford to SUBMIT a swap? Alchemy only — balance and gas price.
      *
@@ -301,6 +306,7 @@ export class ExitManager {
      * trade.
      */
     let sellFailures = 0;
+    let lastBroadcastHash: string | undefined;
     let sellTerminal = false;
     /** Set once the floor has been abandoned as unmeetable; see the SELL_ATTEMPT_LIMIT branch. */
     let floorDropped = false;
@@ -330,6 +336,9 @@ export class ExitManager {
             }
             return false;
           }
+          // A failure AFTER broadcast leaves a transaction that may yet settle. Keep the
+          // hash: it is the only handle on money that has already left.
+          if (r.broadcast && r.hash) lastBroadcastHash = r.hash;
           sellFailures++;
           // Terminal means there is nothing to sell into. Retrying a rug wastes the attempt
           // budget and delays the alert; the tokens are kept and the position marked stuck.
@@ -357,8 +366,55 @@ export class ExitManager {
      * gas-price read — so a wallet that cannot pay makes ZERO gmgn calls instead of the ~24
      * that 12 attempts used to cost (each failure also fired a rug-check quote).
      */
+
+    /**
+     * A position is only stuck if the tokens are still in the wallet. Ask, do not assume.
+     *
+     * Every `stuck` write-off says two things at once: the sale failed, AND the money is
+     * still in the token. The first can be wrong while the second stays unchecked, and then
+     * the bot books a loss on money it already got back. That is not a hypothetical: on
+     * 2026-09-10 a sale of 12,068.44 tokens landed for 0.01654 ETH, the retry collided with
+     * the nonce the landed transaction had consumed, "nonce too low" was read as failure,
+     * and a +$6.66 winner was recorded as a $34.13 total loss. The log said "still holding
+     * 12,068.44" while the wallet held zero.
+     *
+     * The balance is the one fact that cannot be misread. Checked once, on the way out only,
+     * so it costs nothing on any normal exit.
+     *
+     * Silence beats a wrong number: if the tokens are gone but no sale can be found or
+     * priced, this still abandons — but says so loudly, rather than booking $0.00 as though
+     * that were measured.
+     */
+    let recoveredSale = false;
+    const abandonUnlessSold = async (): Promise<boolean> => {
+      const held = await tokenBalance(p.chain, p.token).catch(() => null);
+      if (held === null) return true;                       // cannot look; behave as before
+      if (held > remaining * 0.01) return true;             // genuinely still holding them
+
+      const sale = lastBroadcastHash
+        ? await saleFromTx(p.chain, p.token, lastBroadcastHash).catch(() => null)
+        : null;
+      if (!sale) {
+        onEvent(`  RECONCILE: the wallet holds none of this token but no sale was found on chain — NOT writing it off as a loss without checking by hand`);
+        return true;
+      }
+      const nativePx = cachedNativeUsd(p.chain);
+      if (nativePx === null || nativePx <= 0) {
+        onEvent(`  RECONCILE: sold in ${sale.hash} for ${sale.proceedsNative.toFixed(8)} native, but no price to value it — check by hand`);
+        return true;
+      }
+      const usd = sale.proceedsNative * nativePx;
+      const price = sale.tokensSold > 0 ? usd / sale.tokensSold : 0;
+      onEvent(`  the sale had already landed — ${sale.hash.slice(0, 12)} sold ${sale.tokensSold.toLocaleString("en-US", { maximumFractionDigits: 2 })} for $${usd.toFixed(2)}; recovering it instead of abandoning`);
+      fills.push({ at: Math.floor(Date.now() / 1000), price, tokens: sale.tokensSold, usd,
+        reason, sliceIndex: slice++, remainingAfter: 0 });
+      remaining = 0;
+      recoveredSale = true;
+      return true;
+    };
+
     const afterFailedSell = async (): Promise<boolean> => {
-      if (sellTerminal) return true;
+      if (sellTerminal) return abandonUnlessSold();
       if (gasBlocked) {
         if (!gasReady) { await sleep(gasWaitMs); gasWaitMs = Math.min(gasWaitMs * 2, GAS_WAIT_MAX_MS); return false; }
         // Poll the PRECONDITION, not gmgn. Cheap enough to do often: ~30 CU a look.
@@ -396,7 +452,7 @@ export class ExitManager {
           await sleep(SELL_RETRY_MS);
           return false;
         }
-        return true;
+        return abandonUnlessSold();
       }
       await sleep(SELL_RETRY_MS);
       return false;
@@ -527,7 +583,7 @@ export class ExitManager {
         if (chosen.ok && v) { verifiedFills++; onVerified?.(v.price, v.txHash); }
         totalFills++;
         if (!await sell(chosen.px, remaining, "time_cutoff")) {
-          if (await afterFailedSell()) { reason = "stuck"; break; }
+          if (await afterFailedSell()) { if (!recoveredSale) reason = "stuck"; break; }
           continue;
         }
         reason = "time_cutoff"; break;
@@ -648,7 +704,7 @@ export class ExitManager {
         totalFills++; if (at !== px) verifiedFills++;
         const r: ExitReason = laddering ? "breakeven_stop" : "stop_loss";
         if (!await sell(at, remaining, r)) {
-          if (await afterFailedSell()) { reason = "stuck"; break; }
+          if (await afterFailedSell()) { if (!recoveredSale) reason = "stuck"; break; }
           continue;
         }
         reason = r; break;
@@ -688,13 +744,13 @@ export class ExitManager {
         if (want * fillPx < floor) {
           // Below the floor the tail is mostly gas — dump the remainder in one go.
           if (!await sell(fillPx, remaining, "take_profit_ladder")) {
-            if (await afterFailedSell()) { reason = "stuck"; break; }
+            if (await afterFailedSell()) { if (!recoveredSale) reason = "stuck"; break; }
             continue;
           }
           reason = "take_profit_ladder"; break;
         }
         if (!await sell(fillPx, want, "take_profit_ladder")) {
-          if (await afterFailedSell()) { reason = "stuck"; break; }
+          if (await afterFailedSell()) { if (!recoveredSale) reason = "stuck"; break; }
           continue;
         }
         reason = "take_profit_ladder";

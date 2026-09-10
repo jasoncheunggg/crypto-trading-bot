@@ -108,6 +108,20 @@ export interface SendResult {
   gasUsed?: bigint;
   effectiveGasPrice?: bigint;
   error?: string;
+  /**
+   * The transaction reached the network, whatever happened afterwards.
+   *
+   * A failure AFTER broadcast is categorically different from one before it: the money may
+   * already have moved. Retrying is then not a second chance but a duplicate, and the caller
+   * must confirm rather than resend. Losing this distinction wrote off a winning position as
+   * `stuck` on 2026-09-10 — see findSale() in reconcile.ts.
+   */
+  broadcast?: boolean;
+  /**
+   * The nonce was already consumed. Proof that an EARLIER attempt mined, not evidence of
+   * failure: the account nonce cannot advance on its own.
+   */
+  nonceTaken?: boolean;
 }
 
 /**
@@ -146,13 +160,16 @@ export async function send(a: SendArgs): Promise<SendResult> {
       return { ok: false, error: `simulation reverted: ${String((err as Error).message).slice(0, 300)}` };
     }
 
+    // Hoisted: a throw from the receipt wait must not take the hash down with it. Without
+    // this the caller cannot tell "never sent" from "sent, outcome unknown".
+    let hash: `0x${string}` | undefined;
     try {
       const nonce = await pub.getTransactionCount({ address: acct.address, blockTag: "pending" });
       // 0x's gas figure is for its own route; a 25% buffer covers the difference between a
       // simulated and a mined execution without inviting a runaway limit.
       const gas = a.gas !== undefined ? (a.gas * 125n) / 100n : undefined;
 
-      const hash = await walletClient(a.chain).sendTransaction({
+      hash = await walletClient(a.chain).sendTransaction({
         to: a.to as `0x${string}`,
         data: a.data as `0x${string}` | undefined,
         value: a.value ?? 0n,
@@ -163,7 +180,7 @@ export async function send(a: SendArgs): Promise<SendResult> {
 
       const receipt = await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
       if (receipt.status !== "success") {
-        return { ok: false, hash, error: `reverted on chain (status ${receipt.status})` };
+        return { ok: false, hash, broadcast: true, error: `reverted on chain (status ${receipt.status})` };
       }
       return {
         ok: true, hash,
@@ -171,9 +188,35 @@ export async function send(a: SendArgs): Promise<SendResult> {
         effectiveGasPrice: receipt.effectiveGasPrice,
       };
     } catch (err) {
-      return { ok: false, error: String((err as Error).message).slice(0, 300) };
+      const msg = String((err as Error).message);
+      const nonceTaken = /nonce (?:provided )?.*(?:too low|is lower than)/i.test(msg)
+        || /already known|replacement transaction underpriced/i.test(msg);
+      return { ok: false, hash, broadcast: hash !== undefined || nonceTaken, nonceTaken,
+               error: msg.slice(0, 300) };
     }
   });
+}
+
+/**
+ * Wait again on a transaction we already broadcast.
+ *
+ * The counterpart to `broadcast` on SendResult: when the first receipt wait fell over, the
+ * transaction is still out there and the only wrong move is to send another one. Short
+ * timeout, because this runs on an exit path where the alternative is abandoning a position.
+ */
+export async function confirm(
+  chain: Chain, hash: string, timeout = 20_000,
+): Promise<SendResult> {
+  try {
+    const receipt = await publicClient(chain)
+      .waitForTransactionReceipt({ hash: hash as `0x${string}`, timeout });
+    if (receipt.status !== "success") {
+      return { ok: false, hash, broadcast: true, error: `reverted on chain (status ${receipt.status})` };
+    }
+    return { ok: true, hash, gasUsed: receipt.gasUsed, effectiveGasPrice: receipt.effectiveGasPrice };
+  } catch (err) {
+    return { ok: false, hash, broadcast: true, error: String((err as Error).message).slice(0, 200) };
+  }
 }
 
 /** 0x AllowanceHolder — the only contract we ever approve. Immutable and ownerless: 1,009

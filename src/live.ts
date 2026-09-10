@@ -8,7 +8,7 @@ import { gmgn } from "./gmgn.ts";
 import type { Chain } from "./types.ts";
 import { ZeroExRouter, zeroExSwapTx } from "./router-0x.ts";
 import type { ZeroExSwapTx } from "./router-0x.ts";
-import { send, account, tradingBlocked, ensureAllowance } from "./signer.ts";
+import { send, confirm, account, tradingBlocked, ensureAllowance } from "./signer.ts";
 
 const run = promisify(execFile);
 
@@ -71,6 +71,11 @@ export interface SwapResult {
   error?: string;
   /** Terminal state, from the chain or from our own pre-broadcast simulation. */
   status?: string;
+  /**
+   * The transaction reached the network even though this call failed — so the money may
+   * already have moved, and a retry would be a duplicate rather than a second chance.
+   */
+  broadcast?: boolean;
 }
 
 const NATIVE = "0x0000000000000000000000000000000000000000";
@@ -409,15 +414,30 @@ export async function executeSwap(
     }
   }
 
-  const sent = await send({
+  let sent = await send({
     chain, to: tx.to, data: tx.data, value: tx.value, gas: tx.gas, label: "swap",
   });
+  /**
+   * Broadcast, then lost — ask the chain before calling it a failure.
+   *
+   * The transaction is already out there. Resending is a duplicate that will collide on the
+   * nonce, and reporting failure throws away a fill that may have completed. One more look
+   * at the receipt costs a few seconds on a path that would otherwise abandon the position.
+   */
+  if (!sent.ok && sent.broadcast && sent.hash) {
+    const again = await confirm(chain, sent.hash);
+    if (again.ok) {
+      console.log(`   the sell landed after all — ${sent.hash.slice(0, 12)} confirmed on a second look`);
+      sent = again;
+    }
+  }
+
   if (!sent.ok) {
     // A simulation revert is deterministic against current state — the pool is identical a
     // second later, so a retry cannot succeed. Reported distinctly so attemptEntry does not
     // spend retries on it.
     const status = sent.error?.startsWith("simulation reverted") ? "sim_reverted" : undefined;
-    return { ok: false, status, error: sent.error };
+    return { ok: false, status, error: sent.error, broadcast: sent.broadcast, hash: sent.hash };
   }
 
   const gasUsd = await gasUsdFor(chain, String(sent.gasUsed ?? 0n), String(sent.effectiveGasPrice ?? 0n));

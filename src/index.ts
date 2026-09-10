@@ -510,7 +510,11 @@ function manage(pos: Position, startedAtMs?: number, minHoldSeconds = 0, cutoffS
             return { ok: false as const, error: `rugged: sells for ${usd(worth)} of ${usd(pos.costUsd)}`, terminal: true as const };
           }
           if (worth !== null) console.log(`   [${pos.id}] sell failed but the token still quotes at ${usd(worth)} — treating as transient`);
-          return { ok: false as const, error: r.error ?? `status ${r.status}` };
+          // Carry the hash when the transaction reached the network: the sale may have
+          // settled despite this failure, and exit.ts confirms it rather than writing
+          // the position off. See saleFromTx() in reconcile.ts.
+          return { ok: false as const, error: r.error ?? `status ${r.status}`,
+                   hash: r.hash, broadcast: r.broadcast };
         }
         // r.outputUsd, never r.outputAmount: a sell pays out in native ETH, so the raw amount
         // is a quantity of ETH. Undefined means the price was unreadable, which must not be

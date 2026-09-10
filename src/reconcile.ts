@@ -161,3 +161,78 @@ export async function didSwapLand(
   // Landed if the balance moved most of the way in the expected direction.
   return { landed: ratio > 0.9 && ratio < 1.1, actualDelta: delta, confident: Math.abs(delta) > 0 };
 }
+
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+export interface FoundSale {
+  hash: string;
+  blockNumber: number;
+  tokensSold: number;
+  /** Native received, GROSS of gas — the convention live.ts uses for `outputAmount`. */
+  proceedsNative: number;
+  gasNative: number;
+}
+
+/**
+ * What a sale we already broadcast actually settled for.
+ *
+ * The failure this exists for: a sell can land and still be reported as failed. The
+ * transaction goes out, the receipt wait times out or the connection drops, and the caller
+ * sees only an error. The RETRY then collides with the nonce the landed transaction already
+ * consumed, and "nonce too low" reads as failure when it is in fact proof of success — an
+ * account nonce cannot advance on its own. On 2026-09-10 that wrote off a sale of 12,068.44
+ * tokens for 0.01654 ETH as `stuck` at $0.00 against a $34.13 cost: a +$6.66 winner recorded
+ * as a total loss, while the log insisted "still holding 12,068.44" and the wallet held zero.
+ *
+ * Everything needed is inside the receipt, which is why this takes a hash rather than
+ * searching for one. Searching was tried first and does not work here: Alchemy's free tier
+ * caps eth_getLogs at a TEN block range, and this chain produces ~10 blocks a second, so
+ * covering the few minutes a sale might hide in would cost hundreds of calls. Worse, the
+ * range error came back as an empty result, so a failed search was indistinguishable from
+ * "no sale" — the exact confusion this module exists to prevent.
+ *
+ * Legs are summed because one sale routinely splits across several Transfer events: the
+ * 2026-09-10 sale moved 7,241.06 and 4,827.38 in a single transaction.
+ *
+ * Returns null for a transaction that never mined or reverted — in both cases the tokens are
+ * still ours and the position is not sold.
+ */
+export async function saleFromTx(
+  chain: Chain, token: string, hash: string,
+): Promise<FoundSale | null> {
+  const wallet = config.entry.walletAddress as string | undefined;
+  if (!wallet) return null;
+  const receipt = await rpc<{
+    status?: string; blockNumber: string; gasUsed: string; effectiveGasPrice: string;
+    logs: { address: string; topics: string[]; data: string }[];
+  }>(chain, "eth_getTransactionReceipt", [hash]);
+  if (!receipt) return null;                                   // never mined, or dropped
+  if (BigInt(receipt.status ?? "0x0") !== 1n) return null;      // reverted: nothing moved
+
+  const me = "0x" + wallet.slice(2).toLowerCase().padStart(64, "0");
+  const tok = token.toLowerCase();
+  let raw = 0n;
+  for (const l of receipt.logs) {
+    if (l.address.toLowerCase() !== tok) continue;
+    if (l.topics[0] !== TRANSFER_TOPIC) continue;
+    if ((l.topics[1] ?? "").toLowerCase() !== me) continue;     // sent BY us
+    raw += BigInt(l.data);
+  }
+  if (raw === 0n) return null;                                  // mined, but sold none of this
+
+  const blockNumber = Number(BigInt(receipt.blockNumber));
+  const gasNative = Number(BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPrice)) / 1e18;
+  const dec = await tokenDecimals(chain, token);
+
+  const before = await rpc<string>(chain, "eth_getBalance", [wallet, "0x" + (blockNumber - 1).toString(16)]);
+  const after  = await rpc<string>(chain, "eth_getBalance", [wallet, "0x" + blockNumber.toString(16)]);
+  if (!before || !after) return null;
+
+  return {
+    hash, blockNumber,
+    tokensSold: Number(raw) / 10 ** dec,
+    // Gas added back so this matches how a normal fill is measured in live.ts.
+    proceedsNative: Number(BigInt(after) - BigInt(before)) / 1e18 + gasNative,
+    gasNative,
+  };
+}
