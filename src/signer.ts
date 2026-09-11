@@ -188,7 +188,20 @@ export async function send(a: SendArgs): Promise<SendResult> {
        * the send does afterwards, `hash` is already set and confirm() has something to ask
        * about.
        */
-      const signed = await walletClient(a.chain).signTransaction({
+      const wc = walletClient(a.chain);
+      /**
+       * PREPARE before signing. sendTransaction used to do this for us.
+       *
+       * signTransaction signs exactly what it is handed and fills in nothing. Without fee
+       * fields there is no way to tell a legacy transaction from an EIP-1559 one, so viem
+       * refuses with "Cannot infer a transaction type from provided transaction" — and since
+       * that throws before any hash exists, it surfaced as a plain entry no-fill.
+       *
+       * Omitting this broke every entry for twelve hours on 2026-09-11: 27 signals aborted,
+       * zero trades taken, while the fix it was part of was busy solving a rarer problem.
+       * prepareTransactionRequest is what fills gas price, fee cap and type.
+       */
+      const request = await wc.prepareTransactionRequest({
         to: a.to as `0x${string}`,
         data: a.data as `0x${string}` | undefined,
         value: a.value ?? 0n,
@@ -196,6 +209,7 @@ export async function send(a: SendArgs): Promise<SendResult> {
         nonce,
         chain: CHAINS[a.chain],
       });
+      const signed = await wc.signTransaction(request as never);
       hash = keccak256(signed);
       await pub.sendRawTransaction({ serializedTransaction: signed });
 
