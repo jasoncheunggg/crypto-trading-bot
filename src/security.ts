@@ -88,6 +88,40 @@ export async function tokenRisk(chain: Chain, token: string): Promise<TokenRisk>
  */
 const MAX_SELL_TAX_PCT = 50;
 
+/**
+ * A contract nobody can read is a contract nobody has checked.
+ *
+ * This was REJECTED as a gate on 2026-09-08 — "is_open_source is false for six tokens
+ * averaging +27%" — and re-measured on 2026-09-11 across every token the bot has ever
+ * touched. The earlier number was measuring the wrong thing.
+ *
+ *   82 of 83 tokens answered. 4 were closed source, 5%.
+ *
+ *   open source     98 live trades   +$173.17   +$1.77/trade   win 60%
+ *   CLOSED source    3 live trades    -$24.66   -$8.22/trade   win  0%
+ *
+ * All three closed-source live trades ended stuck or rugged. Every one peaked hard first —
+ * +195%, +157%, +105% — which is the honeypot signature exactly: the chart runs because
+ * nobody can sell. That is where "+27%" came from. Measure the price those tokens REACH and
+ * they look superb; measure what was actually realised and it is 0 for 3.
+ *
+ * The one closed-source token that ever booked a profit did it on PAPER (+$28.42), where a
+ * sale is arithmetic rather than a transaction. Paper and shadow fills cannot tell a honeypot
+ * from a rocket, so they must never be the evidence for a gate about whether an exit exists.
+ *
+ * Free to check: is_open_source rides the same gmgn response already fetched for
+ * top_10_holder_rate, so this costs no extra call and no latency — unlike roundTripProbe,
+ * which answers the same question for 1,483ms and was taken off the entry path on 2026-09-08.
+ *
+ * Thin, and worth revisiting: n=3 live blocks, roughly one per 20 trades at 5% incidence.
+ * Null (gmgn did not answer) is NOT a block — absence of evidence only.
+ */
+export function closedSourceBlocks(risk: TokenRisk): string | null {
+  if (risk.openSource !== false) return null;
+  return "contract is not open source — 3 of 3 such tokens traded live ended stuck or rugged "
+    + "(-$24.66, zero wins), each after peaking 105-195% because the exit did not exist";
+}
+
 export function sellTaxBlocks(risk: TokenRisk): string | null {
   if (risk.sellTaxPct === null) return null;
   if (risk.sellTaxPct <= MAX_SELL_TAX_PCT) return null;

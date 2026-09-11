@@ -10,7 +10,7 @@ import { open as openPosition, close as closePosition, all as allPositions, push
 import { reconcilePosition, tokenBalanceRaw, toRawUnits, tokenBalance, NATIVE_ADDRESS as NATIVE_TOKEN } from "./reconcile.ts";
 import { checkBreaker, capPositionUsd } from "./breaker.ts";
 import { gasUsdPerSwap, reserveUsdPerSwap, currentGwei, recordGas, describeGas } from "./gas.ts";
-import { tokenRisk, concentrationBlocks, bytecodeBlocks, sellTaxBlocks } from "./security.ts";
+import { tokenRisk, concentrationBlocks, bytecodeBlocks, sellTaxBlocks, closedSourceBlocks } from "./security.ts";
 import { refreshBalances, describeBalances, dailyAnchor, gasState, gasNativeHeld, REFRESH_MS } from "./balance.ts";
 import type { Position } from "./positions.ts";
 import { ExitManager, cutoffFor } from "./exit.ts";
@@ -274,6 +274,15 @@ async function onSignal(s: Signal): Promise<void> {
   if (taxed) {
     console.log(`   ACTION  abort — ${taxed}`);
     alert(`SELL TAX REJECT ${s.token} — ${taxed}`);
+    return;
+  }
+
+  // Same reasoning as the sell-tax gate and placed beside it: this is not a risk to weigh but
+  // a token whose exit may not exist. Free — is_open_source rides the response already fetched.
+  const unreadable = closedSourceBlocks(risk);
+  if (unreadable) {
+    console.log(`   ACTION  abort — ${unreadable}`);
+    alert(`CLOSED SOURCE REJECT ${s.token} — ${unreadable}`);
     return;
   }
 
