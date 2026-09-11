@@ -1,4 +1,4 @@
-import { createWalletClient, createPublicClient, http, defineChain, parseGwei } from "viem";
+import { createWalletClient, createPublicClient, http, defineChain, parseGwei, keccak256 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { config } from "./config.ts";
 import type { Chain } from "./types.ts";
@@ -169,7 +169,26 @@ export async function send(a: SendArgs): Promise<SendResult> {
       // simulated and a mined execution without inviting a runaway limit.
       const gas = a.gas !== undefined ? (a.gas * 125n) / 100n : undefined;
 
-      hash = await walletClient(a.chain).sendTransaction({
+      /**
+       * SIGN FIRST, SEND SECOND. Never let one call do both.
+       *
+       * sendTransaction signs and broadcasts atomically, so anything it throws leaves no
+       * hash — and a transaction can land and still throw, because the RPC may resend and
+       * report the DUPLICATE's "nonce too low" as the error. The caller is then told the sale
+       * failed while the money has already moved, with no handle on the transaction that
+       * moved it.
+       *
+       * That cost three positions in two days, every one of them a winner booked as stuck at
+       * $0.00: +$6.66 on 09-10, +$10.58 and +$17.85 on 09-11. Each time the nonce error was
+       * proof the sale had SUCCEEDED, and each time the hash needed to confirm it had been
+       * thrown away by this line.
+       *
+       * Signing locally is deterministic and cannot fail for network reasons, and the hash is
+       * keccak256 of the signed payload — known before anything touches the wire. So whatever
+       * the send does afterwards, `hash` is already set and confirm() has something to ask
+       * about.
+       */
+      const signed = await walletClient(a.chain).signTransaction({
         to: a.to as `0x${string}`,
         data: a.data as `0x${string}` | undefined,
         value: a.value ?? 0n,
@@ -177,6 +196,8 @@ export async function send(a: SendArgs): Promise<SendResult> {
         nonce,
         chain: CHAINS[a.chain],
       });
+      hash = keccak256(signed);
+      await pub.sendRawTransaction({ serializedTransaction: signed });
 
       const receipt = await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
       if (receipt.status !== "success") {

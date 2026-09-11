@@ -352,10 +352,27 @@ function rejections(limit = 120): Rejection[] {
 
   const out: Rejection[] = [];
   const head = /^\[(\S+ \S+)\] (@\S+) \(evm\)\s+\[robinhood\]\s+(\w+)/;
-  let cur: Partial<Rejection> | null = null;
+  /**
+   * Several signals are processed AT ONCE, so their log lines interleave. A single `cur` slot
+   * was overwritten by the next signal's header and every remaining line of the first one --
+   * including its ACTION -- was then dropped on the `!cur` guard.
+   *
+   * That silently hid the rejections most worth seeing. A signal skipped instantly logs four
+   * contiguous lines and survives; one that gets as far as quoting and attempting an entry
+   * takes seconds, so another signal almost always cuts in first. On 2026-09-10 @orangie's
+   * $2,996 buy of 0x1a87253f quoted, reverted on chain, retried and aborted on the floor --
+   * and none of it reached the dashboard, while a $499 skip on the same token minutes later
+   * showed up fine.
+   *
+   * Signals are kept on a stack and an ACTION is matched to the most recent one still open,
+   * which is the order they actually close in: the interrupting signal finishes first.
+   */
+  const stack: Partial<Rejection>[] = [];
+  const cutStack = () => { while (stack.length > 8) stack.shift(); };
   for (const line of text.split("\n")) {
     const m = head.exec(line);
-    if (m) { cur = { when: m[1]!.slice(5, 16), wallet: m[2]!, verdict: m[3]! }; continue; }
+    if (m) { stack.push({ when: m[1]!.slice(5, 16), wallet: m[2]!, verdict: m[3]! }); cutStack(); continue; }
+    const cur = stack[stack.length - 1];
     if (!cur) continue;
     const t = line.trim();
     if (t.startsWith("token   0x")) cur.token = t.split(/\s+/).pop();
@@ -365,15 +382,19 @@ function rejections(limit = 120): Rejection[] {
     } else if (t.startsWith("mcap")) {
       const q = /\$([\d,]+\.?\d*)/.exec(t); cur.mcap = q ? q[1]! : null;
     } else if (t.startsWith("ACTION  skip") || t.startsWith("ACTION  abort")) {
-      if (cur.verdict === "BUY" && cur.token) {
+      // Attribute to the newest signal that still has no verdict, not blindly to the top:
+      // an ACTION can arrive after a later signal has already been pushed.
+      const idx = stack.length - 1;
+      const own = stack[idx]!;
+      if (own.verdict === "BUY" && own.token) {
         out.push({
-          when: cur.when!, wallet: cur.wallet!, verdict: cur.verdict!, token: cur.token,
-          sizeUsd: cur.sizeUsd ?? null, mcap: cur.mcap ?? null,
+          when: own.when!, wallet: own.wallet!, verdict: own.verdict!, token: own.token,
+          sizeUsd: own.sizeUsd ?? null, mcap: own.mcap ?? null,
           kind: t.startsWith("ACTION  abort") ? "abort" : "skip",
           reason: t.replace(/^ACTION\s+(skip|abort)\s+—\s*/, "").trim(),
         });
       }
-      cur = null;
+      stack.splice(idx, 1);
     }
   }
   return out.reverse().slice(0, limit);
