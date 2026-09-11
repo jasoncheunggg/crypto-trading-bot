@@ -148,16 +148,37 @@ export async function send(a: SendArgs): Promise<SendResult> {
   }
 
   return withLock(async () => {
-    try {
-      // 1. SIMULATE against live state.
-      await pub.call({
-        account: acct.address,
-        to: a.to as `0x${string}`,
-        data: a.data as `0x${string}` | undefined,
-        value: a.value,
-      });
-    } catch (err) {
-      return { ok: false, error: `simulation reverted: ${String((err as Error).message).slice(0, 300)}` };
+    /**
+     * Pre-broadcast simulation, OFF by default since 2026-09-11. See
+     * config.execution.simulateBeforeSendNote for the full measurement; the short version:
+     *
+     *   it cost  330ms of a 1,113ms quote->execute window — 0.13% of price movement on a
+     *            median token, 1.95% at p90, 8.62% at p99
+     *   it saved 7 reverts across 96 live entries, ~$1.75 of gas, about 2 cents an entry
+     *
+     * It was safe to drop because the EXIT path never reached it: all 86 recorded sell
+     * failures were caught upstream by 0x refusing a route, by the balance pre-check, or by
+     * the min-output floor. Zero were simulation reverts, so the 12-attempt sell retry loop
+     * cannot become twelve gas-burning broadcasts.
+     *
+     * What it was originally for is worth remembering before switching it back on: it
+     * replaced gmgn's pre-submission refusals when v2.0 took custody and began signing for
+     * itself. Its claim to be "the only defence against a router handing us calldata that
+     * does something other than its quote described" is narrower than it sounds — eth_call
+     * only catches calldata that REVERTS, and short-changing calldata is caught by the
+     * minBuyAmount baked into the transaction instead.
+     */
+    if ((config.execution as { simulateBeforeSend?: boolean }).simulateBeforeSend !== false) {
+      try {
+        await pub.call({
+          account: acct.address,
+          to: a.to as `0x${string}`,
+          data: a.data as `0x${string}` | undefined,
+          value: a.value,
+        });
+      } catch (err) {
+        return { ok: false, error: `simulation reverted: ${String((err as Error).message).slice(0, 300)}` };
+      }
     }
 
     // Hoisted: a throw from the receipt wait must not take the hash down with it. Without
