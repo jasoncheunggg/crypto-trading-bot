@@ -15,6 +15,8 @@ wallets.json
 
 # backups and scratch
 *.bak
+*.bak-*
+*.pre-*
 sc_*.ts
 sc_*.mjs
 
@@ -28,3 +30,11 @@ dist/
 # this is just a browsable one. Committing it would duplicate the whole tree
 # once per version.
 versions/
+
+# reference material for the operator and for Claude, not for publication.
+# HANDOFF.md carries the wallet address and the live P&L; STATE.md and the prompt doc
+# are working notes that go stale the moment they are written.
+HANDOFF.md
+STATE.md
+copy-trading-bot-prompt.md
+.DS_Store

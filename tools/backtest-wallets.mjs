@@ -22,6 +22,7 @@
  * Run: node tools/backtest-wallets.mjs <scratchdir>
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { discoverPool, pricesAt, blockForTime, sleep } from "./v4price.mjs";
 
 const S = process.argv[2];
@@ -75,6 +76,28 @@ save("pools.json", pools);
 const okPools = Object.values(pools).filter(Boolean).length;
 console.log(`  pools found for ${okPools}/${tokens.length} tokens`);
 
+/**
+ * Never compete with a live trade for Alchemy.
+ *
+ * This makes hundreds of calls a minute; the bot's entry path needs the same provider, and a
+ * 429 there costs a real position. Diagnostics alongside a running bot are fine — during an
+ * open position they are not. Checked from disk because the bot holds positions in memory in
+ * its own process.
+ */
+const POSITIONS = resolve(import.meta.dirname, "..", "state", "positions.json");
+async function waitWhileTrading() {
+  for (;;) {
+    let open = 0;
+    try {
+      open = JSON.parse(readFileSync(POSITIONS, "utf8"))
+        .filter((p) => p.status === "open" && !p.shadow).length;
+    } catch { open = 0; }
+    if (!open) return;
+    console.log(`    live position open — pausing`);
+    await sleep(20000);
+  }
+}
+
 // ── price paths ──────────────────────────────────────────────────────────────
 const todo = work.filter((w) => pools[w.token] && !(w.key in paths));
 console.log(`  ${todo.length} paths to build`);
@@ -87,6 +110,7 @@ for (let i = 0; i < todo.length; i++) {
    * accuracy as twenty-one. The linear estimate alone put these paths up to 100s off the
    * entry, which is a different chart on a token like these.
    */
+  if (i % 10 === 0) await waitWhileTrading();
   const a = await blockForTime(w.t);
   const b = await blockForTime(w.t + CUTOFF_S);
   if (!a || !b) { paths[w.key] = null; continue; }
@@ -103,12 +127,42 @@ save("paths.json", paths);
 
 // ── simulate ─────────────────────────────────────────────────────────────────
 const byWallet = {};
-let noPath = 0;
+let noPath = 0, dropped = 0;
 for (const w of work) {
   const rel = paths[w.key];
   if (!rel) { noPath++; continue; }
-  const pts = rel.slice(1).filter((x) => x !== null);
-  if (pts.length < 5) { noPath++; continue; }
+  /**
+   * Discard impossible samples before simulating.
+   *
+   * A slot read can come back near-zero — an uninitialised pool, a gap — and because a
+   * currency1 token inverts the price, near-zero becomes astronomical: one path read
+   * 1.00 0.81 4.3e+44 0.85 0.76, a single bad sample among good ones. Left in, that sample
+   * trips the take-profit instantly and books a fictional win. 9 of 960 paths carried one.
+   *
+   * The band is deliberately wide: these tokens really can do 10x or -90% inside 420
+   * seconds, and the job here is to reject reads that are not prices at all, not to second
+   * guess violent ones.
+   */
+  const raw = rel.slice(1);
+  const clean = raw.filter((x) => x !== null && x > 0.02 && x < 50);
+  /**
+   * Re-base to the first post-entry sample, discarding the block the entry sits in.
+   *
+   * The tracked wallet's own buy moves the price, and the timestamp FOMO reports resolves to
+   * a block that can precede it — so measuring from there counts THEIR impact as OUR gain.
+   * Measured: 63% of paths were already up at the first sample, median +1.89% and p90
+   * +16.57%, where an unbiased basis gives ~50%. It flattered exactly the wallets whose buys
+   * are big enough to move a small cap: our own roster simulated at 100% wins against a live
+   * 63%. Re-based, the same measurement reads 47% up and a median of +0.00%.
+   *
+   * The cost is that entry is now dated ~21s after the signal rather than the few seconds the
+   * bot really takes, which understates a fast entry. Conservative in the right direction.
+   */
+  const basis = clean[0];
+  const pts = basis ? clean.slice(1).map((x) => x / basis) : [];
+  dropped += raw.filter((x) => x !== null).length - clean.length;
+  // Too much of the path missing to judge an exit against.
+  if (pts.length < 5 || clean.length < raw.length * 0.6) { noPath++; continue; }
   let reason = "time_cutoff", pct = (pts[pts.length - 1] - 1) * 100;
   for (const r of pts) {
     const m = (r - 1) * 100;
@@ -136,7 +190,7 @@ save("ranked.json", rows);
 
 const tot = rows.reduce((a, r) => a + r.n, 0);
 const allSl = rows.reduce((a, r) => a + r.sl, 0), allTp = rows.reduce((a, r) => a + r.tp, 0);
-console.log(`\n  simulated ${tot} entries; no usable path for ${noPath}`);
+console.log(`\n  simulated ${tot} entries; no usable path for ${noPath}; ${dropped} impossible samples discarded`);
 console.log(`  exit mix: take_profit ${(allTp / tot * 100).toFixed(0)}%  stop_loss ${(allSl / tot * 100).toFixed(0)}%  cutoff ${((tot - allTp - allSl) / tot * 100).toFixed(0)}%`);
 console.log(`  (your live book: take_profit 39%  stop_loss 18%  cutoff 34%)`);
 

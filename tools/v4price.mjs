@@ -64,8 +64,23 @@ async function blockTime(b) {
  * days. Falls back to bisection if the walk overshoots.
  */
 export async function blockForTime(unix, tol = 2) {
+  /**
+   * Clamp the seed to the chain head before using it.
+   *
+   * blockAt() runs ~3,600 blocks FAST over a day and a half, so for any recent timestamp the
+   * seed lands past the tip. eth_getBlockByNumber returns null there, and this used to give
+   * up on the spot — so a block a few minutes old was "unresolvable" while one from last week
+   * resolved fine. The walk below converges from anywhere; it only needs a real block to
+   * start from.
+   */
   let b = blockAt(unix);
   let t = await blockTime(b);
+  if (t === null) {
+    const head = await rpc("eth_blockNumber", []);
+    if (!head) return null;
+    b = Number(BigInt(head));
+    t = await blockTime(b);
+  }
   if (t === null) return null;
   for (let i = 0; i < 6 && Math.abs(t - unix) > tol; i++) {
     const step = Math.round((unix - t) * ANCHOR.rate);
