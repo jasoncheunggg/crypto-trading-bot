@@ -8,10 +8,17 @@
 state/
 *.log
 
-# the tracked KOL wallet list — this is the strategy's alpha.
-# wallets.example.json IS committed, so the schema is documented without the real addresses.
-wallets.json
-!wallets.example.json
+# wallets.json IS committed as of 2026-09-12, at the operator's decision.
+#
+# It was excluded as "the strategy's alpha", and that reasoning still half applies — the
+# curation is the work, even though the addresses themselves are public on FOMO's
+# leaderboard. What is NOT published is our own results: the per-wallet live P&L and the
+# backtest scores derived from replaying these wallets against our exit rules were stripped
+# from the notes before publishing. Public FOMO data ABOUT the traders (follower counts,
+# their volume, their holdings) is kept, because it is already public and it is the evidence
+# for why each wallet is on the list.
+#
+# If you re-add research figures to these notes, strip them again before committing.
 
 # backups and scratch
 *.bak

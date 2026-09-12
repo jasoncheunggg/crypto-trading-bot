@@ -1,0 +1,354 @@
+{
+  "_README": "Wallets to copy-trade. Edit this file, not config.json. Reloaded at startup.",
+  "_schema": {
+    "name": "Yours. Display only, safe to rename.",
+    "address": "Immutable primary key; per-wallet stats key on this.",
+    "family": "evm | solana - picks the decoder",
+    "chains": "which chains to watch this address on. EVM addresses are valid on every EVM chain.",
+    "platform": "must appear in config.json detection.activePlatforms",
+    "enabled": "false keeps the record without subscribing"
+  },
+  "wallets": [
+    {
+      "name": "@unipcs (solana)",
+      "address": "2heJbC32Tpfcb3nbUb5ER61K11FGZVfVGtVnDm6LDogF",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope for now (FOMO activity is mostly robinhood/bsc). Also: Alchemy has no Solana WSS, so re-enabling needs a second provider such as Helius."
+    },
+    {
+      "name": "@unipcs (evm)",
+      "address": "0x0a6ebed0155edb4b21d92ad02897a626cd90119e",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true
+    },
+    {
+      "name": "@ether_monk (solana)",
+      "address": "2xUbYAVq1oJGj45d6JjnaYHAke3NQecUcqWvvVbwmYw8",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope for now (FOMO activity is mostly robinhood/bsc). Also: Alchemy has no Solana WSS, so re-enabling needs a second provider such as Helius."
+    },
+    {
+      "name": "@ether_monk (evm)",
+      "address": "0x2408ce75d217e3a70d6ca370c78c1b34d706f5a0",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true
+    },
+    {
+      "name": "@frankdegods (solana)",
+      "address": "498g1rVnFcnjBjpfw1xyqA1WvgQXUU8RWuELjxkjAayQ",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_warning": "KNOWN AMBIGUOUS: both of this trader's wallets produced transactions where buy vs receive is not recoverable from chain data. Verify signals manually before trusting them.",
+      "_disabledReason": "Solana out of scope for now (FOMO activity is mostly robinhood/bsc). Also: Alchemy has no Solana WSS, so re-enabling needs a second provider such as Helius."
+    },
+    {
+      "name": "@frankdegods (evm)",
+      "address": "0x696d1265c8fc4f14797abebfae3c43ebfa9d8e28",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_warning": "KNOWN AMBIGUOUS: both of this trader's wallets produced transactions where buy vs receive is not recoverable from chain data. Verify signals manually before trusting them."
+    },
+    {
+      "name": "@lizzerd (solana)",
+      "address": "GsVfkZAoTLCCHtWN54kjaWw9dDXyTLY1MzJeEck9KpCo",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope for now (FOMO activity is mostly robinhood/bsc). Also: Alchemy has no Solana WSS, so re-enabling needs a second provider such as Helius."
+    },
+    {
+      "name": "@lizzerd (evm)",
+      "address": "0x97d6fab2459f11ffef5986e098a674a6a5f10e66",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true
+    },
+    {
+      "name": "@Quanterty (evm)",
+      "address": "0x0121525f755c9e7bbc525bba6672716ab46ced57",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_vetted": "no FOMO buys in the last 20 inbound transfers per chain \u2014 watch whether it is quiet or inactive"
+    },
+    {
+      "name": "@Quanterty (solana)",
+      "address": "8f39XhhZoRD8sYb6K5K9N7iSHXkL7BDmFFQNDF3TtsEr",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana detection is off \u2014 Alchemy has no Solana WSS (logsSubscribe returns 'Method not found'). Enabling needs a second provider such as Helius."
+    },
+    {
+      "name": "@econoar (evm)",
+      "address": "0x1605b59dfe3c1742c815d604aab6a2faa3a5c91f",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_vetted": "2 FOMO buys / $7,451 in the sampled window"
+    },
+    {
+      "name": "@econoar (solana)",
+      "address": "7sQJttJLutWjHkxbusTgE4GpSj5z4fegouv2USHDFN2H",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana detection is off \u2014 Alchemy has no Solana WSS (logsSubscribe returns 'Method not found'). Enabling needs a second provider such as Helius."
+    },
+    {
+      "name": "@orangie (evm)",
+      "address": "0x0eb6f8e5c8bc7d5c920d485b7b3d52e56cdef21f",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_vetted": "12 FOMO buys / $39,394 across 6 tokens in the sampled window \u2014 most active of the three"
+    },
+    {
+      "name": "@orangie (solana)",
+      "address": "83b2LMf12aLec92kur3duRA8VvUkLaXUtML31aCcZNCM",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana detection is off \u2014 Alchemy has no Solana WSS (logsSubscribe returns 'Method not found'). Enabling needs a second provider such as Helius."
+    },
+    {
+      "name": "@change (evm)",
+      "address": "0x92bff72e6c943a1348aedf15d68e758e811dec64",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_verified": "verified: STONKBROKER $828,868 (liq $5.2M), UP $30,444 (liq $3.6M), CLAN $18,222 (liq $209k)"
+    },
+    {
+      "name": "@change (solana)",
+      "address": "J9WiAZKf8JnCkHFL8fLCCXdEgdoLjLRqU2EGsDjdqYga",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope \u2014 most FOMO volume is robinhood/bsc. Re-enabling also needs a second provider: Alchemy has no Solana WSS."
+    },
+    {
+      "name": "@DumbCrayonEater (evm)",
+      "address": "0x8f62a08537cede87d511aca6436274ab4ca080a3",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_verified": "verified: AI $3.66M (liq $3.2M), CETS $356k bsc (liq $637k), NET $64,950 (liq $1.4M), PROLOGUE $63,415 (liq $431k)"
+    },
+    {
+      "name": "@DumbCrayonEater (solana)",
+      "address": "5FGoPPj1nL8LCnfVnpTmreqQtqLuMXXAwuS1uahMrp8V",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope \u2014 most FOMO volume is robinhood/bsc. Re-enabling also needs a second provider: Alchemy has no Solana WSS."
+    },
+    {
+      "name": "@Salem1299534 (evm)",
+      "address": "0xb8f305f27ccc406373de0082cc06cb1d065504ea",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_verified": "verified: AI $3.15M (liq $3.1M), SIT $48,339 (liq $490k), CHIPS $3,644 (liq $108k). Also holds plumber on BASE (liq $109k) \u2014 out of scope while chains are robinhood+bsc."
+    },
+    {
+      "name": "@Salem1299534 (solana)",
+      "address": "2yXwy5Dsa1XtEXcsrkFVRJeyuWD3qKkMN3pP3p5VTW3V",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope \u2014 most FOMO volume is robinhood/bsc. Re-enabling also needs a second provider: Alchemy has no Solana WSS."
+    },
+    {
+      "name": "@AvgJoesCrypto (evm)",
+      "address": "0x06de9c48b1e639ed5c13ec8fbd4080a38e39f2d1",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_verified": "verified: PONS $1.93M (liq $5.6M), AI $122,741 (liq $3.2M), MOO $69,601 (liq $727k). Headline holdings include a broken price feed (MONKEYKING at $5.3e17) \u2014 ignore unfiltered valuations for this wallet."
+    },
+    {
+      "name": "@AvgJoesCrypto (solana)",
+      "address": "H2QSGECp13sFLJgdTsDtayX3dk18Dm6sQMSQKcew7Xzk",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope \u2014 most FOMO volume is robinhood/bsc. Re-enabling also needs a second provider: Alchemy has no Solana WSS."
+    },
+    {
+      "name": "@FartmanSacks (evm)",
+      "address": "0x7f6e4e1e59be05dc717c8e5429154a7408609ee2",
+      "family": "evm",
+      "chains": [
+        "robinhood"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_note": "Added 2026-09-04 from the FOMO API (rank #67, 40,339 followers, $719,681 volume, 706 trades). Portfolio is 99.1% robinhood, so bsc is omitted. CAUTION: average hold is 361,962s (~4.2 days) against this bots ~7 minute cutoff \u2014 his entries are positions, not scalps, so copying them tests a very different thesis from the other ten wallets.",
+      "_disabledReason": "Removed 2026-09-11. The weakest wallet in the live book by a clear margin \u2014 consistently negative over a meaningful number of real trades. Not on FOMO's leaderboard, so no follower count or backtest score exists for it; the live record was the whole evidence and it was enough."
+    },
+    {
+      "name": "@FartmanSacks (solana)",
+      "address": "59mWSDjx5VFQz15FGJio8BJzupKorK5SVHSbaJaZGAxC",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope for now, same as every other solana entry."
+    },
+    {
+      "name": "@0xAvast (solana)",
+      "address": "8xL8S7P4QLdTGRquHas8NP5EVjp2qUGbmSgrkh97mvmq",
+      "family": "solana",
+      "chains": [
+        "solana"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Solana out of scope for now (FOMO activity is mostly robinhood/bsc). Also: Alchemy has no Solana WSS, so re-enabling needs a second provider such as Helius."
+    },
+    {
+      "name": "@0xAvast (evm)",
+      "address": "0xcc0c581613dfd4ace7c8686668427236f8bd5cc5",
+      "family": "evm",
+      "chains": [
+        "robinhood",
+        "bsc"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_addedNote": "Added 2026-09-09 from the FOMO API. Rank 17, $1,219,720 all-time PnL over 1,177 trades, 310,373 followers, wallets verified, clan Troupe KZ. Confirmed active on robinhood: 15 of the 40 most recent trades are on this chain (plus bsc, solana, ethereum), 260 closed trades. UNPROVEN HERE: no trade of theirs has been copied yet, so treat the first dozen signals as data rather than as edge \u2014 the ranking is FOMO's own and measures their PnL, not ours after entry slippage."
+    },
+    {
+      "name": "@tranquiloguey (evm)",
+      "address": "0x62922b85cc67999e3afbe2c24364d1fbe46874eb",
+      "family": "evm",
+      "chains": [
+        "robinhood"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Removed 2026-09-11 at the operator's judgement, same rule as OmakaseOnly: too few followers (224) to draw the copytrader flow a 420s hold depends on. This gives up real signal volume \u2014 it had by far the highest rate of qualifying signals in the sample, and backtested well. Follower count showed NO predictive power in that backtest; the rule rests on the operator's read of the mechanism, not on the data."
+    },
+    {
+      "name": "@dylansdegens (evm)",
+      "address": "0x0d3b6fb8207bbfd6ec8c16728a7b34bc1fab3d71",
+      "family": "evm",
+      "chains": [
+        "robinhood"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_addedNote": "Added 2026-09-11. Best confidence-adjusted score in the backtest \u2014 the ranking that penalises a good average built on few trades."
+    },
+    {
+      "name": "@OmakaseOnly (evm)",
+      "address": "0x6802190b213325612bc709b4972f7e6f408456a9",
+      "family": "evm",
+      "chains": [
+        "robinhood"
+      ],
+      "platform": "fomo",
+      "enabled": false,
+      "_disabledReason": "Removed 2026-09-11 at the operator's judgement: too few followers to draw the copytrader flow this strategy depends on. It backtested well \u2014 the steadiest returns in the sample and no token overlap with the rest of the roster \u2014 so this is judgement overruling the measurement, deliberately."
+    },
+    {
+      "name": "@rasmr (evm)",
+      "address": "0x2fbd041a069bb3d7099d55179169091cfeec4221",
+      "family": "evm",
+      "chains": [
+        "robinhood"
+      ],
+      "platform": "fomo",
+      "enabled": true,
+      "_addedNote": "Added 2026-09-11 by request. The backtest was NEGATIVE and this was the weakest wallet on the roster by that measure, on a sample too small to be a verdict. Worth watching rather than trusting."
+    }
+  ]
+}
