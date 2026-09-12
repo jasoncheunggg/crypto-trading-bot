@@ -86,7 +86,7 @@ export async function tokenRisk(chain: Chain, token: string): Promise<TokenRisk>
  * FAILS OPEN, like everything else here: a null tax is unknown, not safe, but blocking every
  * signal because gmgn hiccuped is the worse failure.
  */
-const MAX_SELL_TAX_PCT = 50;
+export const MAX_SELL_TAX_PCT = 50;
 
 /**
  * A contract nobody can read is a contract nobody has checked.
@@ -142,7 +142,7 @@ export function sellTaxBlocks(risk: TokenRisk): string | null {
  * below 30% and NOTHING has ever landed between 30% and 47%. The gap is empty, so 38% and 50%
  * reject exactly the same historical trades — the rug — and no others.
  */
-const BANDS: { belowMarketCapUsd: number; maxTop10Pct: number }[] = [
+export const CONCENTRATION_BANDS: { belowMarketCapUsd: number; maxTop10Pct: number }[] = [
   { belowMarketCapUsd: 150_000, maxTop10Pct: 38 },
   { belowMarketCapUsd: 250_000, maxTop10Pct: 50 },
 ];
@@ -153,7 +153,7 @@ export function concentrationBlocks(
 ): string | null {
   if (risk.top10Pct === null) return null;
   // First matching band wins, so order ascending by market cap.
-  for (const b of BANDS) {
+  for (const b of CONCENTRATION_BANDS) {
     if (marketCapUsd >= b.belowMarketCapUsd) continue;
     if (risk.top10Pct <= b.maxTop10Pct) return null;
     return `top-10 hold ${risk.top10Pct.toFixed(0)}% of a $${Math.round(marketCapUsd).toLocaleString()} token `

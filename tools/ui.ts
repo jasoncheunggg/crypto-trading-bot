@@ -37,6 +37,9 @@ if (HOST !== "127.0.0.1" && HOST !== "localhost" && !TOKEN) {
 const { config } = await import("../src/config.ts");
 
 const { checkBreaker } = await import("../src/breaker.ts");
+/* Imported, never re-declared: a gate shown in the UI must be the SAME number the code
+   enforces, or the settings tab quietly becomes a second source of truth that drifts. */
+const { MAX_SELL_TAX_PCT, MAX_BYTECODE_BYTES, CONCENTRATION_BANDS } = await import("../src/security.ts");
 const { fundsFor, sizePosition } = await import("../src/portfolio.ts");
 const { dailyAnchor } = await import("../src/balance.ts");
 const live = await import("../src/live.ts");
@@ -437,10 +440,26 @@ function tunables() {
       { name: "slippage", rows: [
         ["swap tolerance", `${e.swapSlippageTolerancePct}%`],
         ["vs signal price", `${e.maxSlippagePctVsSignalPrice}%`],
+        /* Ranges, not "below X". maxSlippagePctFor takes the FIRST matching band, so with
+           more than one band the second covers prev..cur — labelling it "below 600k" would
+           claim it applies to a $50k token, which the first band actually handles. */
         ...((e.maxSlippagePctByMarketCap as { maxMarketCapUsd: number; pct: number }[]) ?? [])
-          .map((b) => [`  below ${fmtMc(b.maxMarketCapUsd)} mcap`, `${b.pct}%`] as [string, string]),
+          .map((b, i, a) => [
+            `  ${fmtMc(i ? a[i - 1]!.maxMarketCapUsd : 0)}-${fmtMc(b.maxMarketCapUsd)} mcap`,
+            `${b.pct}%`,
+          ] as [string, string]),
         ...((e.maxSlippagePctBySignalMarketCap as { maxSignalMarketCapUsd: number; pct: number }[]) ?? [])
           .map((b) => [`  their fill under ${fmtMc(b.maxSignalMarketCapUsd)}`, `${b.pct}%`] as [string, string]),
+      ] },
+      { name: "security gates", rows: [
+        ["closed source", "blocked"],
+        ["max sell tax", `${MAX_SELL_TAX_PCT}%`],
+        ["max bytecode", `${MAX_BYTECODE_BYTES.toLocaleString()} bytes`],
+        ...CONCENTRATION_BANDS.map((b) => [
+          `  top-10 under ${fmtMc(b.belowMarketCapUsd)}`, `max ${b.maxTop10Pct}%`,
+        ] as [string, string]),
+        ["simulate before send", (config.execution as { simulateBeforeSend?: boolean })
+          .simulateBeforeSend === false ? "off" : "on"],
       ] },
       // Case-INSENSITIVE, and matches a bare "note" as well as the "…Note" convention. The
       // first version tested endsWith("Note"), which let a lowercase `note` through — its
