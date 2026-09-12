@@ -1,5 +1,11 @@
 # gmgn-cli Command Reference
 
+> **Scope note.** This documents the whole `gmgn-cli` surface, not what the bot uses. The bot
+> calls only the DATA commands — `token info` and `token security`. It does not swap through
+> gmgn: every trade is quoted by 0x and signed locally by `src/signer.ts`. The `swap` and
+> `multi-swap` sections below are here for completeness and are not part of the trading path.
+
+
 ## Global Options
 
 All commands support `--raw`: output single-line JSON (useful for piping to `jq` or other tools).

@@ -30,6 +30,9 @@ sc_*.mjs
 # local tooling config
 .claude/
 
+# gmgn-cli skill definitions — reference material for an assistant, not part of the bot.
+.agents/
+
 node_modules/
 dist/
 
