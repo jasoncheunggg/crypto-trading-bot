@@ -74,8 +74,22 @@ tools/
 
 ## Running it
 
-Requires Node 22+ (the runtime type-strips TypeScript directly — there is no build step) and
-an Alchemy key with websocket access.
+### Prerequisites
+
+- **Node 22+.** The runtime type-strips TypeScript directly; there is no build step.
+- **An Alchemy key with websocket access** — detection is a WSS subscription.
+- **A 0x API key.**
+- **`gmgn-cli` on your PATH.** *Not on npm, and not shipped here.* The bot shells out to it
+  for three things nothing else provides on this chain: token security fields (top-10 holder
+  concentration, sell tax, open-source flag), pool liquidity, and the price feed the exit
+  loop watches. `cli-usage.md` documents the commands used.
+
+  **Without it the bot does not crash — it degrades quietly, which is worse.** The security
+  gates fail open, so nothing gets blocked; and `priceOf` returns null, so open positions
+  have no price and are effectively unmanaged until the time cutoff fires. If you run this
+  without `gmgn-cli`, run it with `mode.dryRun: true` and watch the log for
+  `*** NO PRICE ... position is UNMANAGED`.
+
 
 ```bash
 git clone https://github.com/jasoncheunggg/crypto-trading-bot.git
